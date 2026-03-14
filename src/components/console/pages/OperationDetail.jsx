@@ -70,10 +70,10 @@ function OperationDetail() {
           ...item,
           orderedQuantity,
           availableQuantity,
-          isInsufficient: orderedQuantity > availableQuantity,
+          isInsufficient: !isReceipt && orderedQuantity > availableQuantity,
         }
       }),
-    [form.items, form.locationId, products],
+    [form.items, form.locationId, isReceipt, products],
   )
 
   useEffect(() => {
@@ -191,7 +191,9 @@ function OperationDetail() {
       setOrder(updatedOrder)
       setForm(toEditableForm(updatedOrder))
 
-      if (response.all_items_in_stock) {
+      if (isReceipt) {
+        setFeedback({ type: 'success', message: 'Validation successful. Receipt status updated to Ready.' })
+      } else if (response.all_items_in_stock) {
         setFeedback({ type: 'success', message: 'Validation successful. All items are in stock.' })
       } else {
         setFeedback({
@@ -379,26 +381,17 @@ function OperationDetail() {
 
           <div className="operations-field">
             <label htmlFor="detail-contact">Contact Details</label>
-            {isReceipt ? (
-              <div className="operations-phone-input">
-                <span>+91</span>
-                <input
-                  id="detail-contact"
-                  inputMode="numeric"
-                  maxLength={10}
-                  value={form.contactNumber}
-                  onChange={(event) => setField('contactNumber', sanitizePhoneDigits(event.target.value))}
-                  placeholder="9876543210"
-                />
-              </div>
-            ) : (
+            <div className="operations-phone-input">
+              <span>+91</span>
               <input
                 id="detail-contact"
+                inputMode="numeric"
+                maxLength={10}
                 value={form.contactNumber}
-                onChange={(event) => setField('contactNumber', event.target.value)}
-                placeholder="Contact details"
+                onChange={(event) => setField('contactNumber', sanitizePhoneDigits(event.target.value))}
+                placeholder="9876543210"
               />
-            )}
+            </div>
           </div>
 
           <div className="operations-field">
@@ -498,15 +491,11 @@ function OperationDetail() {
 }
 
 function toEditableForm(order) {
-  const isReceipt = String(order?.operation_type || '').toUpperCase() === 'IN'
-
   return {
     from: String(order?.from_party || ''),
     to: String(order?.to_party || ''),
     locationId: String(order?.location_id || ''),
-    contactNumber: isReceipt
-      ? sanitizePhoneDigits(String(order?.contact_number || ''))
-      : String(order?.contact_number || ''),
+    contactNumber: sanitizePhoneDigits(String(order?.contact_number || '')),
     scheduleDate: toInputDate(order?.scheduled_date),
     status: String(order?.status || 'DRAFT').toUpperCase(),
     items: (order?.items || []).map((item) => ({
@@ -521,12 +510,12 @@ function validateDetailForm(form, isReceipt) {
   if (!form.locationId) return 'Shipping location is required.'
   if (!form.scheduleDate) return 'Shipping date is required.'
   if (form.scheduleDate < todayDateISO()) return 'Shipping date must be today or future only.'
+  if (sanitizePhoneDigits(form.contactNumber).length !== 10) {
+    return 'Contact number must be exactly 10 digits.'
+  }
 
   if (isReceipt) {
     if (!String(form.from || '').trim()) return 'Vendor details (From) are required for receipts.'
-    if (sanitizePhoneDigits(form.contactNumber).length !== 10) {
-      return 'Contact number must be exactly 10 digits.'
-    }
   } else {
     if (!String(form.to || '').trim()) return 'Vendor details (To) are required for deliveries.'
   }
@@ -545,9 +534,7 @@ function buildUpdatePayload({ form, isReceipt, locationById }) {
     from: String(form.from || '').trim(),
     to: isReceipt ? String(form.to || '').trim() || destinationLocationLabel : String(form.to || '').trim(),
     location_id: String(form.locationId || '').trim(),
-    contact_number: isReceipt
-      ? `+91${sanitizePhoneDigits(form.contactNumber)}`
-      : String(form.contactNumber || '').trim(),
+    contact_number: `+91${sanitizePhoneDigits(form.contactNumber)}`,
     schedule_date: String(form.scheduleDate || ''),
     status: String(form.status || '').toUpperCase(),
     items: normalizeItemsPayload(form.items),
@@ -596,7 +583,7 @@ function buildPrintableContent({ operationType, referenceNumber, form, itemsWith
     `Shipping Location: ${locationLabel}`,
     `Vendor (From): ${form.from || '--'}`,
     `Vendor (To): ${form.to || '--'}`,
-    `Contact: ${operationType === 'IN' ? `+91${sanitizePhoneDigits(form.contactNumber)}` : form.contactNumber || '--'}`,
+    `Contact: ${sanitizePhoneDigits(form.contactNumber) ? `+91${sanitizePhoneDigits(form.contactNumber)}` : '--'}`,
     '',
     'Items',
     '----------------------------------------',

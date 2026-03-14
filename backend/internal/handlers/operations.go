@@ -426,13 +426,13 @@ func (h *OperationsHandler) normalizeOrderPartiesAndContactForCreate(input *repo
 		return errors.New("invalid order input")
 	}
 
-	if input.OperationType == "IN" {
-		contactNumber, err := normalizeIndianPhone(input.ContactNumber)
-		if err != nil {
-			return err
-		}
-		input.ContactNumber = contactNumber
+	contactNumber, err := normalizeIndianPhone(input.ContactNumber)
+	if err != nil {
+		return err
+	}
+	input.ContactNumber = contactNumber
 
+	if input.OperationType == "IN" {
 		if strings.TrimSpace(input.ToParty) == "" {
 			locationLabel, err := h.resolveLocationLabel(input.LocationID)
 			if err != nil {
@@ -450,13 +450,13 @@ func (h *OperationsHandler) normalizeOrderPartiesAndContact(input *repository.Op
 		return errors.New("invalid order input")
 	}
 
-	if input.OperationType == "IN" {
-		contactNumber, err := normalizeIndianPhone(input.ContactNumber)
-		if err != nil {
-			return err
-		}
-		input.ContactNumber = contactNumber
+	contactNumber, err := normalizeIndianPhone(input.ContactNumber)
+	if err != nil {
+		return err
+	}
+	input.ContactNumber = contactNumber
 
+	if input.OperationType == "IN" {
 		if strings.TrimSpace(input.ToParty) == "" {
 			locationLabel, err := h.resolveLocationLabel(input.LocationID)
 			if err != nil {
@@ -495,9 +495,6 @@ func validateCreateOperationRequest(operationType string, input repository.Opera
 		if strings.TrimSpace(input.FromParty) == "" {
 			return errors.New("vendor name is required in receipt")
 		}
-		if strings.TrimSpace(input.ContactNumber) == "" {
-			return errors.New("contact number is required in receipt")
-		}
 		if strings.TrimSpace(input.ToParty) == "" {
 			return errors.New("destination location is required in receipt")
 		}
@@ -505,6 +502,10 @@ func validateCreateOperationRequest(operationType string, input repository.Opera
 		if strings.TrimSpace(input.ToParty) == "" {
 			return errors.New("vendor name is required in delivery")
 		}
+	}
+
+	if strings.TrimSpace(input.ContactNumber) == "" {
+		return errors.New("contact number is required")
 	}
 
 	return nil
@@ -532,14 +533,15 @@ func validateUpdateOperationRequest(input repository.OperationUpdateInput) error
 		if strings.TrimSpace(input.FromParty) == "" {
 			return errors.New("vendor name is required in receipt")
 		}
-		if strings.TrimSpace(input.ContactNumber) == "" {
-			return errors.New("contact number is required in receipt")
-		}
 		if strings.TrimSpace(input.ToParty) == "" {
 			return errors.New("destination location is required in receipt")
 		}
 	} else if strings.TrimSpace(input.ToParty) == "" {
 		return errors.New("vendor name is required in delivery")
+	}
+
+	if strings.TrimSpace(input.ContactNumber) == "" {
+		return errors.New("contact number is required")
 	}
 
 	return nil
@@ -575,7 +577,7 @@ func validateScheduleDateNotPast(dateValue time.Time) error {
 func normalizeIndianPhone(raw string) (string, error) {
 	cleaned := strings.TrimSpace(raw)
 	if cleaned == "" {
-		return "", errors.New("contact number is required in receipt")
+		return "", errors.New("contact number is required")
 	}
 
 	replacer := strings.NewReplacer(" ", "", "-", "", "(", "", ")", "")
@@ -650,6 +652,10 @@ func mapOperationsError(err error) (int, string) {
 		return http.StatusBadRequest, "invalid product reference"
 	case errors.Is(err, repository.ErrOperationNotFound):
 		return http.StatusNotFound, "operation order not found"
+	case errors.Is(err, repository.ErrOperationStockInsufficient):
+		return http.StatusBadRequest, "insufficient stock for this delivery"
+	case errors.Is(err, repository.ErrOperationFinalized):
+		return http.StatusBadRequest, "done or cancelled orders cannot be changed"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

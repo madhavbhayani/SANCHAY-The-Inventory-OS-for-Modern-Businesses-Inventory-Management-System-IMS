@@ -132,57 +132,109 @@ CREATE TABLE IF NOT EXISTS "stocks".products (
     sku                    VARCHAR(80)    NOT NULL UNIQUE DEFAULT ('SKU/' || UPPER(SUBSTRING(REPLACE(gen_random_uuid()::text, '-', '') FROM 1 FOR 12))),
     name                   VARCHAR(180)   NOT NULL,
     cost                   NUMERIC(12,2)  NOT NULL CHECK (cost >= 0),
-    on_hand_quantity       INTEGER        NOT NULL CHECK (on_hand_quantity >= 0),
-    free_to_use_quantity   INTEGER        NOT NULL CHECK (free_to_use_quantity >= 0),
     category_id            UUID           NOT NULL REFERENCES "stocks".categories(id) ON DELETE RESTRICT,
-    location_id            UUID           NOT NULL REFERENCES "locations".locations(id) ON DELETE RESTRICT,
+    stock_levels           JSONB          NOT NULL DEFAULT '[]'::jsonb,
     description            TEXT,
     created_at             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
     updated_at             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    CHECK (free_to_use_quantity <= on_hand_quantity)
+    CHECK (jsonb_typeof(stock_levels) = 'array')
 );
 
 CREATE INDEX IF NOT EXISTS idx_stocks_products_name         ON "stocks".products (name);
 CREATE INDEX IF NOT EXISTS idx_stocks_products_sku          ON "stocks".products (sku);
 CREATE INDEX IF NOT EXISTS idx_stocks_products_category_id  ON "stocks".products (category_id);
-CREATE INDEX IF NOT EXISTS idx_stocks_products_location_id  ON "stocks".products (location_id);
 CREATE INDEX IF NOT EXISTS idx_stocks_products_updated_at   ON "stocks".products (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stocks_products_stock_levels ON "stocks".products USING GIN (stock_levels);
 
--- Supports many-to-many mapping between products and locations with per-location
--- quantity tracking.
-CREATE TABLE IF NOT EXISTS "stocks".product_stock_levels (
-    product_id             UUID           NOT NULL REFERENCES "stocks".products(id) ON DELETE CASCADE,
-    location_id            UUID           NOT NULL REFERENCES "locations".locations(id) ON DELETE RESTRICT,
-    on_hand_quantity       INTEGER        NOT NULL CHECK (on_hand_quantity >= 0),
-    free_to_use_quantity   INTEGER        NOT NULL CHECK (free_to_use_quantity >= 0),
-    created_at             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    updated_at             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (product_id, location_id),
-    CHECK (free_to_use_quantity <= on_hand_quantity)
-);
+ALTER TABLE "stocks".products
+ADD COLUMN IF NOT EXISTS stock_levels JSONB;
 
-CREATE INDEX IF NOT EXISTS idx_product_stock_levels_product_id  ON "stocks".product_stock_levels (product_id);
-CREATE INDEX IF NOT EXISTS idx_product_stock_levels_location_id ON "stocks".product_stock_levels (location_id);
-CREATE INDEX IF NOT EXISTS idx_product_stock_levels_updated_at  ON "stocks".product_stock_levels (updated_at DESC);
+UPDATE "stocks".products
+SET stock_levels = '[]'::jsonb
+WHERE stock_levels IS NULL;
 
--- Backfill the new stock-level table from legacy single-location columns.
-INSERT INTO "stocks".product_stock_levels (
-    product_id,
-    location_id,
-    on_hand_quantity,
-    free_to_use_quantity
-)
-SELECT
-    p.id,
-    p.location_id,
-    p.on_hand_quantity,
-    p.free_to_use_quantity
-FROM "stocks".products p
-ON CONFLICT (product_id, location_id) DO UPDATE
-SET
-    on_hand_quantity = EXCLUDED.on_hand_quantity,
-    free_to_use_quantity = EXCLUDED.free_to_use_quantity,
-    updated_at = NOW();
+DO $$
+BEGIN
+    IF to_regclass('stocks.product_stock_levels') IS NOT NULL THEN
+        EXECUTE '
+            UPDATE "stocks".products p
+            SET stock_levels = source.stock_levels
+            FROM (
+                SELECT
+                    psl.product_id,
+                    jsonb_agg(
+                        jsonb_build_object(
+                            ''location_id'', psl.location_id::text,
+                            ''on_hand_quantity'', psl.on_hand_quantity,
+                            ''free_to_use_quantity'', psl.free_to_use_quantity
+                        )
+                        ORDER BY psl.created_at ASC, psl.location_id ASC
+                    ) AS stock_levels
+                FROM "stocks".product_stock_levels psl
+                GROUP BY psl.product_id
+            ) AS source
+            WHERE p.id = source.product_id
+        ';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'stocks'
+          AND table_name = 'products'
+          AND column_name = 'location_id'
+    ) THEN
+        EXECUTE '
+            UPDATE "stocks".products
+            SET stock_levels = CASE
+                WHEN COALESCE(jsonb_array_length(stock_levels), 0) > 0 THEN stock_levels
+                ELSE jsonb_build_array(
+                    jsonb_build_object(
+                        ''location_id'', location_id::text,
+                        ''on_hand_quantity'', on_hand_quantity,
+                        ''free_to_use_quantity'', free_to_use_quantity
+                    )
+                )
+            END
+            WHERE location_id IS NOT NULL
+        ';
+
+        EXECUTE 'ALTER TABLE "stocks".products DROP COLUMN IF EXISTS free_to_use_quantity CASCADE';
+        EXECUTE 'ALTER TABLE "stocks".products DROP COLUMN IF EXISTS on_hand_quantity CASCADE';
+        EXECUTE 'ALTER TABLE "stocks".products DROP COLUMN IF EXISTS location_id CASCADE';
+    END IF;
+END $$;
+
+ALTER TABLE "stocks".products
+ALTER COLUMN stock_levels SET DEFAULT '[]'::jsonb;
+
+UPDATE "stocks".products
+SET stock_levels = '[]'::jsonb
+WHERE stock_levels IS NULL;
+
+ALTER TABLE "stocks".products
+ALTER COLUMN stock_levels SET NOT NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'stocks'
+          AND t.relname = 'products'
+          AND c.conname = 'stocks_products_stock_levels_array_check'
+    ) THEN
+        EXECUTE '
+            ALTER TABLE "stocks".products
+            ADD CONSTRAINT stocks_products_stock_levels_array_check
+            CHECK (jsonb_typeof(stock_levels) = ''array'')
+        ';
+    END IF;
+END $$;
+
+DROP TABLE IF EXISTS "stocks".product_stock_levels;
 
 CREATE SEQUENCE IF NOT EXISTS "operations".reference_seq START WITH 1 INCREMENT BY 1;
 

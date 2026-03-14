@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -30,6 +31,12 @@ type ProductUpsertInput struct {
 	CategoryID  string
 	Description string
 	StockLevels []ProductStockLevelInput
+}
+
+type storedProductStockLevel struct {
+	LocationID        string `json:"location_id"`
+	OnHandQuantity    int    `json:"on_hand_quantity"`
+	FreeToUseQuantity int    `json:"free_to_use_quantity"`
 }
 
 func (r *StockRepo) ListCategories() ([]models.ProductCategory, error) {
@@ -117,6 +124,10 @@ func (r *StockRepo) ListProducts(search string, limit int) ([]models.Product, er
 	}
 
 	search = strings.TrimSpace(search)
+	locationsByID, err := r.loadLocationsByID()
+	if err != nil {
+		return nil, err
+	}
 
 	const q = `
 		SELECT
@@ -124,29 +135,13 @@ func (r *StockRepo) ListProducts(search string, limit int) ([]models.Product, er
 			p.sku,
 			p.name,
 			p.cost,
-			COALESCE(levels.total_on_hand, p.on_hand_quantity, 0) AS on_hand_quantity,
-			COALESCE(levels.total_free_to_use, p.free_to_use_quantity, 0) AS free_to_use_quantity,
 			p.category_id,
 			c.name AS category_name,
-			p.location_id,
-			COALESCE(l.name, ''),
-			COALESCE(l.short_code, ''),
-			COALESCE(array_agg(DISTINCT w.name ORDER BY w.name)
-				FILTER (WHERE w.name IS NOT NULL), '{}') AS warehouse_names,
+			COALESCE(p.stock_levels, '[]'::jsonb),
 			COALESCE(p.description, ''),
 			p.updated_at
 		FROM stocks.products p
 		JOIN stocks.categories c ON c.id = p.category_id
-		LEFT JOIN locations.locations l ON l.id = p.location_id
-		LEFT JOIN locations.location_warehouses lw ON lw.location_id = l.id
-		LEFT JOIN locations.warehouses w ON w.id = lw.warehouse_id
-		LEFT JOIN LATERAL (
-			SELECT
-				SUM(psl.on_hand_quantity)::INT AS total_on_hand,
-				SUM(psl.free_to_use_quantity)::INT AS total_free_to_use
-			FROM stocks.product_stock_levels psl
-			WHERE psl.product_id = p.id
-		) levels ON TRUE
 		WHERE (
 			$1 = ''
 			OR p.sku ILIKE '%' || $1 || '%'
@@ -155,19 +150,12 @@ func (r *StockRepo) ListProducts(search string, limit int) ([]models.Product, er
 			OR COALESCE(p.description, '') ILIKE '%' || $1 || '%'
 			OR EXISTS (
 				SELECT 1
-				FROM stocks.product_stock_levels pslx
-				JOIN locations.locations lx ON lx.id = pslx.location_id
-				WHERE pslx.product_id = p.id
-				  AND (lx.name ILIKE '%' || $1 || '%' OR lx.short_code ILIKE '%' || $1 || '%')
+				FROM jsonb_array_elements(COALESCE(p.stock_levels, '[]'::jsonb)) AS stock_level(value)
+				JOIN locations.locations lx ON lx.id::text = stock_level.value->>'location_id'
+				WHERE lx.name ILIKE '%' || $1 || '%'
+				   OR lx.short_code ILIKE '%' || $1 || '%'
 			)
 		)
-		GROUP BY
-			p.id, p.sku, p.name, p.cost,
-			levels.total_on_hand, levels.total_free_to_use,
-			p.on_hand_quantity, p.free_to_use_quantity,
-			p.category_id, c.name,
-			p.location_id, l.name, l.short_code,
-			p.description, p.updated_at
 		ORDER BY p.updated_at DESC
 		LIMIT $2`
 
@@ -179,39 +167,32 @@ func (r *StockRepo) ListProducts(search string, limit int) ([]models.Product, er
 
 	products := make([]models.Product, 0)
 	for rows.Next() {
-		var product models.Product
-		var warehouses pq.StringArray
+		var (
+			product        models.Product
+			rawStockLevels []byte
+		)
+
 		if err := rows.Scan(
 			&product.ID,
 			&product.SKU,
 			&product.Name,
 			&product.Cost,
-			&product.OnHandQuantity,
-			&product.FreeToUseQuantity,
 			&product.CategoryID,
 			&product.CategoryName,
-			&product.LocationID,
-			&product.LocationName,
-			&product.LocationShortCode,
-			&warehouses,
+			&rawStockLevels,
 			&product.Description,
 			&product.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
-		product.WarehouseNames = append([]string(nil), warehouses...)
-		product.StockLevels = make([]models.ProductStockLevel, 0)
+
+		if err := populateProductStockFields(&product, rawStockLevels, locationsByID); err != nil {
+			return nil, err
+		}
 		products = append(products, product)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
 
-	if err := r.attachStockLevels(products); err != nil {
-		return nil, err
-	}
-
-	return products, nil
+	return products, rows.Err()
 }
 
 func (r *StockRepo) CreateProduct(input ProductUpsertInput) (*models.Product, error) {
@@ -220,39 +201,26 @@ func (r *StockRepo) CreateProduct(input ProductUpsertInput) (*models.Product, er
 		return nil, ErrProductStockLevelsRequired
 	}
 
-	primary := levels[0]
-
-	tx, err := r.db.Begin()
+	serializedLevels, err := marshalStockLevels(levels)
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
 
-	const insertProduct = `
+	const q = `
 		INSERT INTO stocks.products
-			(name, cost, on_hand_quantity, free_to_use_quantity, category_id, location_id, description)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+			(name, cost, category_id, stock_levels, description)
+		VALUES ($1, $2, $3, $4::jsonb, $5)
 		RETURNING id`
 
 	var productID string
-	if err := tx.QueryRow(
-		insertProduct,
+	if err := r.db.QueryRow(
+		q,
 		input.Name,
 		input.Cost,
-		primary.OnHandQuantity,
-		primary.FreeToUseQuantity,
 		input.CategoryID,
-		primary.LocationID,
+		serializedLevels,
 		nullableText(input.Description),
 	).Scan(&productID); err != nil {
-		return nil, err
-	}
-
-	if err := r.replaceProductStockLevelsTx(tx, productID, levels); err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 
@@ -265,36 +233,29 @@ func (r *StockRepo) UpdateProduct(productID string, input ProductUpsertInput) (*
 		return nil, ErrProductStockLevelsRequired
 	}
 
-	primary := levels[0]
-
-	tx, err := r.db.Begin()
+	serializedLevels, err := marshalStockLevels(levels)
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
 
-	const updateProduct = `
+	const q = `
 		UPDATE stocks.products
 		SET
 			name = $2,
 			cost = $3,
-			on_hand_quantity = $4,
-			free_to_use_quantity = $5,
-			category_id = $6,
-			location_id = $7,
-			description = $8,
+			category_id = $4,
+			stock_levels = $5::jsonb,
+			description = $6,
 			updated_at = NOW()
 		WHERE id = $1`
 
-	result, err := tx.Exec(
-		updateProduct,
+	result, err := r.db.Exec(
+		q,
 		productID,
 		input.Name,
 		input.Cost,
-		primary.OnHandQuantity,
-		primary.FreeToUseQuantity,
 		input.CategoryID,
-		primary.LocationID,
+		serializedLevels,
 		nullableText(input.Description),
 	)
 	if err != nil {
@@ -304,14 +265,6 @@ func (r *StockRepo) UpdateProduct(productID string, input ProductUpsertInput) (*
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
 		return nil, ErrProductNotFound
-	}
-
-	if err := r.replaceProductStockLevelsTx(tx, productID, levels); err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
 	}
 
 	return r.GetProductByID(productID)
@@ -331,59 +284,39 @@ func (r *StockRepo) DeleteProduct(productID string) error {
 }
 
 func (r *StockRepo) GetProductByID(productID string) (*models.Product, error) {
+	locationsByID, err := r.loadLocationsByID()
+	if err != nil {
+		return nil, err
+	}
+
 	const q = `
 		SELECT
 			p.id,
 			p.sku,
 			p.name,
 			p.cost,
-			COALESCE(levels.total_on_hand, p.on_hand_quantity, 0) AS on_hand_quantity,
-			COALESCE(levels.total_free_to_use, p.free_to_use_quantity, 0) AS free_to_use_quantity,
 			p.category_id,
 			c.name AS category_name,
-			p.location_id,
-			COALESCE(l.name, ''),
-			COALESCE(l.short_code, ''),
-			COALESCE(array_agg(DISTINCT w.name ORDER BY w.name)
-				FILTER (WHERE w.name IS NOT NULL), '{}') AS warehouse_names,
+			COALESCE(p.stock_levels, '[]'::jsonb),
 			COALESCE(p.description, ''),
 			p.updated_at
 		FROM stocks.products p
 		JOIN stocks.categories c ON c.id = p.category_id
-		LEFT JOIN locations.locations l ON l.id = p.location_id
-		LEFT JOIN locations.location_warehouses lw ON lw.location_id = l.id
-		LEFT JOIN locations.warehouses w ON w.id = lw.warehouse_id
-		LEFT JOIN LATERAL (
-			SELECT
-				SUM(psl.on_hand_quantity)::INT AS total_on_hand,
-				SUM(psl.free_to_use_quantity)::INT AS total_free_to_use
-			FROM stocks.product_stock_levels psl
-			WHERE psl.product_id = p.id
-		) levels ON TRUE
-		WHERE p.id = $1
-		GROUP BY
-			p.id, p.sku, p.name, p.cost,
-			levels.total_on_hand, levels.total_free_to_use,
-			p.on_hand_quantity, p.free_to_use_quantity,
-			p.category_id, c.name,
-			p.location_id, l.name, l.short_code,
-			p.description, p.updated_at`
+		WHERE p.id = $1`
 
-	var product models.Product
-	var warehouses pq.StringArray
-	err := r.db.QueryRow(q, productID).Scan(
+	var (
+		product        models.Product
+		rawStockLevels []byte
+	)
+
+	err = r.db.QueryRow(q, productID).Scan(
 		&product.ID,
 		&product.SKU,
 		&product.Name,
 		&product.Cost,
-		&product.OnHandQuantity,
-		&product.FreeToUseQuantity,
 		&product.CategoryID,
 		&product.CategoryName,
-		&product.LocationID,
-		&product.LocationName,
-		&product.LocationShortCode,
-		&warehouses,
+		&rawStockLevels,
 		&product.Description,
 		&product.UpdatedAt,
 	)
@@ -393,140 +326,95 @@ func (r *StockRepo) GetProductByID(productID string) (*models.Product, error) {
 		}
 		return nil, err
 	}
-	product.WarehouseNames = append([]string(nil), warehouses...)
-	product.StockLevels = make([]models.ProductStockLevel, 0)
 
-	levelsByProduct, err := r.listStockLevelsByProductIDs([]string{productID})
-	if err != nil {
+	if err := populateProductStockFields(&product, rawStockLevels, locationsByID); err != nil {
 		return nil, err
 	}
-	product.StockLevels = append(product.StockLevels, levelsByProduct[productID]...)
 
 	return &product, nil
 }
 
-func (r *StockRepo) replaceProductStockLevelsTx(tx *sql.Tx, productID string, levels []ProductStockLevelInput) error {
-	if _, err := tx.Exec(`DELETE FROM stocks.product_stock_levels WHERE product_id = $1`, productID); err != nil {
+func (r *StockRepo) loadLocationsByID() (map[string]models.ProductLocation, error) {
+	locations, err := r.ListLocations()
+	if err != nil {
+		return nil, err
+	}
+
+	locationsByID := make(map[string]models.ProductLocation, len(locations))
+	for _, location := range locations {
+		locationsByID[location.ID] = location
+	}
+	return locationsByID, nil
+}
+
+func populateProductStockFields(product *models.Product, rawStockLevels []byte, locationsByID map[string]models.ProductLocation) error {
+	levels, err := unmarshalProductStockLevels(rawStockLevels)
+	if err != nil {
 		return err
 	}
 
-	const upsertLevel = `
-		INSERT INTO stocks.product_stock_levels (
-			product_id,
-			location_id,
-			on_hand_quantity,
-			free_to_use_quantity,
-			updated_at
-		)
-		VALUES ($1, $2, $3, $4, NOW())
-		ON CONFLICT (product_id, location_id)
-		DO UPDATE SET
-			on_hand_quantity = EXCLUDED.on_hand_quantity,
-			free_to_use_quantity = EXCLUDED.free_to_use_quantity,
-			updated_at = NOW()`
+	product.StockLevels = make([]models.ProductStockLevel, 0, len(levels))
+	product.OnHandQuantity = 0
+	product.FreeToUseQuantity = 0
+	product.LocationID = ""
+	product.LocationName = ""
+	product.LocationShortCode = ""
+	product.WarehouseNames = nil
 
+	for index, level := range levels {
+		if metadata, ok := locationsByID[level.LocationID]; ok {
+			level.LocationName = metadata.Name
+			level.LocationShortCode = metadata.ShortCode
+			level.WarehouseNames = append([]string(nil), metadata.WarehouseNames...)
+		}
+
+		product.StockLevels = append(product.StockLevels, level)
+		product.OnHandQuantity += level.OnHandQuantity
+		product.FreeToUseQuantity += level.FreeToUseQuantity
+
+		if index == 0 {
+			product.LocationID = level.LocationID
+			product.LocationName = level.LocationName
+			product.LocationShortCode = level.LocationShortCode
+			product.WarehouseNames = append([]string(nil), level.WarehouseNames...)
+		}
+	}
+
+	return nil
+}
+
+func marshalStockLevels(levels []ProductStockLevelInput) ([]byte, error) {
+	storedLevels := make([]storedProductStockLevel, 0, len(levels))
 	for _, level := range levels {
-		if _, err := tx.Exec(
-			upsertLevel,
-			productID,
-			level.LocationID,
-			level.OnHandQuantity,
-			level.FreeToUseQuantity,
-		); err != nil {
-			return err
-		}
+		storedLevels = append(storedLevels, storedProductStockLevel{
+			LocationID:        strings.TrimSpace(level.LocationID),
+			OnHandQuantity:    level.OnHandQuantity,
+			FreeToUseQuantity: level.FreeToUseQuantity,
+		})
 	}
-
-	return nil
+	return json.Marshal(storedLevels)
 }
 
-func (r *StockRepo) attachStockLevels(products []models.Product) error {
-	if len(products) == 0 {
-		return nil
+func unmarshalProductStockLevels(rawStockLevels []byte) ([]models.ProductStockLevel, error) {
+	if len(rawStockLevels) == 0 {
+		return []models.ProductStockLevel{}, nil
 	}
 
-	productIDs := make([]string, 0, len(products))
-	indexByID := make(map[string]int, len(products))
-	for index := range products {
-		productIDs = append(productIDs, products[index].ID)
-		indexByID[products[index].ID] = index
-	}
-
-	levelsByProduct, err := r.listStockLevelsByProductIDs(productIDs)
-	if err != nil {
-		return err
-	}
-
-	for productID, levels := range levelsByProduct {
-		if index, ok := indexByID[productID]; ok {
-			products[index].StockLevels = append(products[index].StockLevels, levels...)
-		}
-	}
-
-	return nil
-}
-
-func (r *StockRepo) listStockLevelsByProductIDs(productIDs []string) (map[string][]models.ProductStockLevel, error) {
-	levelsByProduct := make(map[string][]models.ProductStockLevel)
-	if len(productIDs) == 0 {
-		return levelsByProduct, nil
-	}
-
-	const q = `
-		SELECT
-			psl.product_id,
-			psl.location_id,
-			l.name,
-			l.short_code,
-			COALESCE(array_agg(w.name ORDER BY w.name)
-				FILTER (WHERE w.name IS NOT NULL), '{}') AS warehouse_names,
-			psl.on_hand_quantity,
-			psl.free_to_use_quantity
-		FROM stocks.product_stock_levels psl
-		JOIN locations.locations l ON l.id = psl.location_id
-		LEFT JOIN locations.location_warehouses lw ON lw.location_id = l.id
-		LEFT JOIN locations.warehouses w ON w.id = lw.warehouse_id
-		WHERE psl.product_id = ANY($1::uuid[])
-		GROUP BY
-			psl.product_id,
-			psl.location_id,
-			l.name,
-			l.short_code,
-			psl.on_hand_quantity,
-			psl.free_to_use_quantity
-		ORDER BY l.name ASC, psl.location_id ASC`
-
-	rows, err := r.db.Query(q, pq.Array(productIDs))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var (
-			productID  string
-			level      models.ProductStockLevel
-			warehouses pq.StringArray
-		)
-		if err := rows.Scan(
-			&productID,
-			&level.LocationID,
-			&level.LocationName,
-			&level.LocationShortCode,
-			&warehouses,
-			&level.OnHandQuantity,
-			&level.FreeToUseQuantity,
-		); err != nil {
-			return nil, err
-		}
-		level.WarehouseNames = append([]string(nil), warehouses...)
-		levelsByProduct[productID] = append(levelsByProduct[productID], level)
-	}
-	if err := rows.Err(); err != nil {
+	storedLevels := make([]storedProductStockLevel, 0)
+	if err := json.Unmarshal(rawStockLevels, &storedLevels); err != nil {
 		return nil, err
 	}
 
-	return levelsByProduct, nil
+	levels := make([]models.ProductStockLevel, 0, len(storedLevels))
+	for _, storedLevel := range storedLevels {
+		levels = append(levels, models.ProductStockLevel{
+			LocationID:        strings.TrimSpace(storedLevel.LocationID),
+			OnHandQuantity:    storedLevel.OnHandQuantity,
+			FreeToUseQuantity: storedLevel.FreeToUseQuantity,
+		})
+	}
+
+	return levels, nil
 }
 
 func normalizeStockLevels(stockLevels []ProductStockLevelInput) []ProductStockLevelInput {
