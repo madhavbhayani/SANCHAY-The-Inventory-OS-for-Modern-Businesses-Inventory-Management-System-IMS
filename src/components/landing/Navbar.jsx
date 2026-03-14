@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { HiOutlineBars3, HiOutlineXMark } from 'react-icons/hi2'
+import { Link } from 'react-router-dom'
 import SanchayLogo from './SanchayLogo'
 import '../../styles/landing/navbar.css'
 
@@ -60,12 +61,12 @@ function Navbar({ activeSection, onNavigate }) {
         </nav>
 
         <div className="navbar-actions">
-          <button type="button" className="signin-btn">
+          <Link to="/login" className="signin-btn">
             Sign In
-          </button>
-          <button type="button" className="get-started-btn" onClick={() => handleNavigate('services')}>
+          </Link>
+          <Link to="/signup" className="get-started-btn">
             Get Started
-          </button>
+          </Link>
         </div>
 
         <button
@@ -102,12 +103,12 @@ function Navbar({ activeSection, onNavigate }) {
         </nav>
 
         <div className="navbar-drawer-actions">
-          <button type="button" className="signin-btn">
+          <Link to="/login" className="signin-btn">
             Sign In
-          </button>
-          <button type="button" className="get-started-btn" onClick={() => handleNavigate('services')}>
+          </Link>
+          <Link to="/signup" className="get-started-btn">
             Get Started
-          </button>
+          </Link>
         </div>
       </aside>
     </header>

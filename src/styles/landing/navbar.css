@@ -60,10 +60,16 @@
 
 .signin-btn,
 .get-started-btn {
+  display: inline-flex;
+  align-items: center;
   border-radius: var(--radius-sm);
   padding: 8px 20px;
   font-size: 14px;
+  font-family: inherit;
+  font-weight: 500;
   line-height: 1;
+  cursor: pointer;
+  text-decoration: none;
 }
 
 .signin-btn {
