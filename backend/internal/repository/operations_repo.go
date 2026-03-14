@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,12 +14,14 @@ import (
 )
 
 var (
-	ErrOperationTypeInvalid     = errors.New("operation type is invalid")
-	ErrOperationStatusInvalid   = errors.New("operation status is invalid")
-	ErrOperationItemsRequired   = errors.New("at least one product line item is required")
-	ErrOperationLocationInvalid = errors.New("invalid location reference")
-	ErrOperationProductInvalid  = errors.New("invalid product reference")
-	ErrOperationNotFound        = errors.New("operation order not found")
+	ErrOperationTypeInvalid       = errors.New("operation type is invalid")
+	ErrOperationStatusInvalid     = errors.New("operation status is invalid")
+	ErrOperationItemsRequired     = errors.New("at least one product line item is required")
+	ErrOperationLocationInvalid   = errors.New("invalid location reference")
+	ErrOperationProductInvalid    = errors.New("invalid product reference")
+	ErrOperationNotFound          = errors.New("operation order not found")
+	ErrOperationStockInsufficient = errors.New("insufficient stock for delivery")
+	ErrOperationFinalized         = errors.New("finalized order cannot be modified")
 )
 
 type OperationsRepo struct{ db *sql.DB }
@@ -92,27 +95,20 @@ func (r *OperationsRepo) ListProducts(limit int) ([]models.OperationProductOptio
 		limit = 220
 	}
 
+	locationsByID, err := r.loadLocationsByID()
+	if err != nil {
+		return nil, err
+	}
+
 	const q = `
 		SELECT
 			p.id,
 			p.sku,
 			p.name,
 			c.name AS category_name,
-			p.location_id,
-			COALESCE(l.name, ''),
-			COALESCE(l.short_code, ''),
-			COALESCE(levels.total_on_hand, p.on_hand_quantity, 0) AS on_hand_quantity,
-			COALESCE(levels.total_free_to_use, p.free_to_use_quantity, 0) AS free_to_use_quantity
+			COALESCE(p.stock_levels, '[]'::jsonb)
 		FROM stocks.products p
 		JOIN stocks.categories c ON c.id = p.category_id
-		LEFT JOIN locations.locations l ON l.id = p.location_id
-		LEFT JOIN LATERAL (
-			SELECT
-				SUM(psl.on_hand_quantity)::INT AS total_on_hand,
-				SUM(psl.free_to_use_quantity)::INT AS total_free_to_use
-			FROM stocks.product_stock_levels psl
-			WHERE psl.product_id = p.id
-		) levels ON TRUE
 		ORDER BY p.updated_at DESC
 		LIMIT $1`
 
@@ -124,32 +120,26 @@ func (r *OperationsRepo) ListProducts(limit int) ([]models.OperationProductOptio
 
 	products := make([]models.OperationProductOption, 0)
 	for rows.Next() {
-		var product models.OperationProductOption
+		var (
+			product        models.OperationProductOption
+			rawStockLevels []byte
+		)
 		if err := rows.Scan(
 			&product.ID,
 			&product.SKU,
 			&product.Name,
 			&product.CategoryName,
-			&product.LocationID,
-			&product.LocationName,
-			&product.LocationShortCode,
-			&product.OnHandQuantity,
-			&product.FreeToUseQuantity,
+			&rawStockLevels,
 		); err != nil {
 			return nil, err
 		}
-		product.StockLevels = make([]models.OperationProductStockLevel, 0)
+		if err := populateOperationProductStockFields(&product, rawStockLevels, locationsByID); err != nil {
+			return nil, err
+		}
 		products = append(products, product)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
 
-	if err := r.attachProductStockLevels(products); err != nil {
-		return nil, err
-	}
-
-	return products, nil
+	return products, rows.Err()
 }
 
 func (r *OperationsRepo) ListOrders(operationType string, limit int) ([]models.OperationOrder, error) {
@@ -355,6 +345,12 @@ func (r *OperationsRepo) CreateOrder(input OperationCreateInput) (*models.Operat
 		}
 	}
 
+	if status == "DONE" {
+		if err := applyStockMovementTx(tx, opType, locationID, aggregatedItems); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -479,16 +475,30 @@ func (r *OperationsRepo) UpdateOrderByReference(input OperationUpdateInput) (*mo
 	defer tx.Rollback()
 
 	const lookupOrder = `
-		SELECT id
+		SELECT id, status
 		FROM operations.orders
-		WHERE operation_type = $1 AND reference_number = $2`
+		WHERE operation_type = $1 AND reference_number = $2
+		FOR UPDATE`
 
-	var orderID int64
-	if err := tx.QueryRow(lookupOrder, opType, ref).Scan(&orderID); err != nil {
+	var (
+		orderID       int64
+		currentStatus string
+	)
+	if err := tx.QueryRow(lookupOrder, opType, ref).Scan(&orderID, &currentStatus); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrOperationNotFound
 		}
 		return nil, err
+	}
+
+	if isTerminalOperationStatus(currentStatus) {
+		return nil, ErrOperationFinalized
+	}
+
+	if status == "CANCELLED" {
+		if err := ensureOrdersStatusConstraintTx(tx); err != nil {
+			return nil, err
+		}
 	}
 
 	warehouseShortCode, err := resolveWarehouseShortCodeTx(tx, locationID)
@@ -548,6 +558,12 @@ func (r *OperationsRepo) UpdateOrderByReference(input OperationUpdateInput) (*mo
 		}
 	}
 
+	if status == "DONE" {
+		if err := applyStockMovementTx(tx, opType, locationID, aggregatedItems); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -570,18 +586,64 @@ func (r *OperationsRepo) UpdateOrderStatusByReference(operationType, referenceNu
 		return nil, ErrOperationStatusInvalid
 	}
 
+	tx, err := r.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	orderRecord, err := getOrderForUpdateTx(tx, opType, ref)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrOperationNotFound
+		}
+		return nil, err
+	}
+
+	currentStatus := strings.ToUpper(strings.TrimSpace(orderRecord.Status))
+	if currentStatus == normalizedStatus {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return r.GetOrderByReference(opType, ref)
+	}
+
+	if isTerminalOperationStatus(currentStatus) {
+		return nil, ErrOperationFinalized
+	}
+
+	if normalizedStatus == "CANCELLED" {
+		if err := ensureOrdersStatusConstraintTx(tx); err != nil {
+			return nil, err
+		}
+	}
+
+	if normalizedStatus == "DONE" {
+		items, err := listOrderItemQuantitiesTx(tx, orderRecord.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := applyStockMovementTx(tx, opType, orderRecord.LocationID, items); err != nil {
+			return nil, err
+		}
+	}
+
 	const q = `
 		UPDATE operations.orders
 		SET status = $3, updated_at = NOW()
 		WHERE operation_type = $1 AND reference_number = $2`
 
-	result, err := r.db.Exec(q, opType, ref, normalizedStatus)
+	result, err := tx.Exec(q, opType, ref, normalizedStatus)
 	if err != nil {
 		return nil, err
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
 		return nil, ErrOperationNotFound
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 
 	return r.GetOrderByReference(opType, ref)
@@ -591,6 +653,18 @@ func (r *OperationsRepo) ValidateOrderByReference(operationType, referenceNumber
 	order, err := r.GetOrderByReference(operationType, referenceNumber)
 	if err != nil {
 		return nil, false, err
+	}
+
+	if order.OperationType == "IN" {
+		if order.Status != "READY" && order.Status != "DONE" && order.Status != "CANCELLED" {
+			updated, err := r.UpdateOrderStatusByReference(order.OperationType, order.ReferenceNumber, "READY")
+			if err != nil {
+				return nil, false, err
+			}
+			return updated, true, nil
+		}
+
+		return order, true, nil
 	}
 
 	allItemsInStock := true
@@ -628,60 +702,6 @@ func (r *OperationsRepo) DeleteOrder(orderID int64) error {
 	return nil
 }
 
-func (r *OperationsRepo) attachProductStockLevels(products []models.OperationProductOption) error {
-	if len(products) == 0 {
-		return nil
-	}
-
-	productIDs := make([]string, 0, len(products))
-	indexByID := make(map[string]int, len(products))
-	for index := range products {
-		productIDs = append(productIDs, products[index].ID)
-		indexByID[products[index].ID] = index
-	}
-
-	const q = `
-		SELECT
-			psl.product_id,
-			psl.location_id,
-			l.name,
-			l.short_code,
-			psl.on_hand_quantity,
-			psl.free_to_use_quantity
-		FROM stocks.product_stock_levels psl
-		JOIN locations.locations l ON l.id = psl.location_id
-		WHERE psl.product_id = ANY($1::uuid[])
-		ORDER BY l.name ASC, psl.location_id ASC`
-
-	rows, err := r.db.Query(q, pq.Array(productIDs))
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var (
-			productID string
-			level     models.OperationProductStockLevel
-		)
-		if err := rows.Scan(
-			&productID,
-			&level.LocationID,
-			&level.LocationName,
-			&level.LocationShortCode,
-			&level.OnHandQuantity,
-			&level.FreeToUseQuantity,
-		); err != nil {
-			return err
-		}
-		if index, ok := indexByID[productID]; ok {
-			products[index].StockLevels = append(products[index].StockLevels, level)
-		}
-	}
-
-	return rows.Err()
-}
-
 func (r *OperationsRepo) listItemsByOrderIDs(orderIDs []int64) (map[int64][]models.OperationOrderItem, error) {
 	itemsByOrderID := make(map[int64][]models.OperationOrderItem)
 	if len(orderIDs) == 0 {
@@ -696,13 +716,11 @@ func (r *OperationsRepo) listItemsByOrderIDs(orderIDs []int64) (map[int64][]mode
 			p.sku,
 			p.name,
 			oi.quantity,
-			COALESCE(psl.free_to_use_quantity, 0) AS available_quantity
+			COALESCE(p.stock_levels, '[]'::jsonb),
+			o.location_id
 		FROM operations.order_items oi
 		JOIN stocks.products p ON p.id = oi.product_id
 		JOIN operations.orders o ON o.id = oi.order_id
-		LEFT JOIN stocks.product_stock_levels psl
-			ON psl.product_id = oi.product_id
-			AND psl.location_id = o.location_id
 		WHERE oi.order_id = ANY($1)
 		ORDER BY oi.order_id DESC, oi.created_at ASC, oi.id ASC`
 
@@ -714,8 +732,10 @@ func (r *OperationsRepo) listItemsByOrderIDs(orderIDs []int64) (map[int64][]mode
 
 	for rows.Next() {
 		var (
-			item    models.OperationOrderItem
-			orderID int64
+			item           models.OperationOrderItem
+			orderID        int64
+			rawStockLevels []byte
+			locationID     string
 		)
 		if err := rows.Scan(
 			&item.ID,
@@ -724,10 +744,17 @@ func (r *OperationsRepo) listItemsByOrderIDs(orderIDs []int64) (map[int64][]mode
 			&item.ProductSKU,
 			&item.ProductName,
 			&item.Quantity,
-			&item.AvailableQuantity,
+			&rawStockLevels,
+			&locationID,
 		); err != nil {
 			return nil, err
 		}
+
+		availableQuantity, err := freeToUseQuantityForLocation(rawStockLevels, locationID)
+		if err != nil {
+			return nil, err
+		}
+		item.AvailableQuantity = availableQuantity
 
 		itemsByOrderID[orderID] = append(itemsByOrderID[orderID], item)
 	}
@@ -737,6 +764,290 @@ func (r *OperationsRepo) listItemsByOrderIDs(orderIDs []int64) (map[int64][]mode
 	}
 
 	return itemsByOrderID, nil
+}
+
+func (r *OperationsRepo) loadLocationsByID() (map[string]models.OperationLocationOption, error) {
+	locations, err := r.ListLocations()
+	if err != nil {
+		return nil, err
+	}
+
+	locationsByID := make(map[string]models.OperationLocationOption, len(locations))
+	for _, location := range locations {
+		locationsByID[location.ID] = location
+	}
+
+	return locationsByID, nil
+}
+
+func populateOperationProductStockFields(product *models.OperationProductOption, rawStockLevels []byte, locationsByID map[string]models.OperationLocationOption) error {
+	levels, err := unmarshalProductStockLevels(rawStockLevels)
+	if err != nil {
+		return err
+	}
+
+	sort.SliceStable(levels, func(i, j int) bool {
+		leftName := locationNameForOperationLevel(levels[i].LocationID, locationsByID)
+		rightName := locationNameForOperationLevel(levels[j].LocationID, locationsByID)
+		if leftName == rightName {
+			return levels[i].LocationID < levels[j].LocationID
+		}
+		if leftName == "" {
+			return false
+		}
+		if rightName == "" {
+			return true
+		}
+		return leftName < rightName
+	})
+
+	product.StockLevels = make([]models.OperationProductStockLevel, 0, len(levels))
+	product.OnHandQuantity = 0
+	product.FreeToUseQuantity = 0
+	product.LocationID = ""
+	product.LocationName = ""
+	product.LocationShortCode = ""
+
+	for index, level := range levels {
+		operationLevel := models.OperationProductStockLevel{
+			LocationID:        level.LocationID,
+			OnHandQuantity:    level.OnHandQuantity,
+			FreeToUseQuantity: level.FreeToUseQuantity,
+		}
+
+		if metadata, ok := locationsByID[level.LocationID]; ok {
+			operationLevel.LocationName = metadata.Name
+			operationLevel.LocationShortCode = metadata.ShortCode
+		}
+
+		product.StockLevels = append(product.StockLevels, operationLevel)
+		product.OnHandQuantity += operationLevel.OnHandQuantity
+		product.FreeToUseQuantity += operationLevel.FreeToUseQuantity
+
+		if index == 0 {
+			product.LocationID = operationLevel.LocationID
+			product.LocationName = operationLevel.LocationName
+			product.LocationShortCode = operationLevel.LocationShortCode
+		}
+	}
+
+	return nil
+}
+
+func locationNameForOperationLevel(locationID string, locationsByID map[string]models.OperationLocationOption) string {
+	if metadata, ok := locationsByID[locationID]; ok {
+		return metadata.Name
+	}
+	return ""
+}
+
+func freeToUseQuantityForLocation(rawStockLevels []byte, locationID string) (int, error) {
+	levels, err := unmarshalProductStockLevels(rawStockLevels)
+	if err != nil {
+		return 0, err
+	}
+
+	normalizedLocationID := strings.TrimSpace(locationID)
+	for _, level := range levels {
+		if strings.TrimSpace(level.LocationID) == normalizedLocationID {
+			return level.FreeToUseQuantity, nil
+		}
+	}
+
+	return 0, nil
+}
+
+type operationOrderRecord struct {
+	ID         int64
+	Status     string
+	LocationID string
+}
+
+func getOrderForUpdateTx(tx *sql.Tx, operationType, referenceNumber string) (*operationOrderRecord, error) {
+	const q = `
+		SELECT id, status, location_id
+		FROM operations.orders
+		WHERE operation_type = $1 AND reference_number = $2
+		FOR UPDATE`
+
+	var order operationOrderRecord
+	if err := tx.QueryRow(q, operationType, referenceNumber).Scan(&order.ID, &order.Status, &order.LocationID); err != nil {
+		return nil, err
+	}
+
+	return &order, nil
+}
+
+func listOrderItemQuantitiesTx(tx *sql.Tx, orderID int64) (map[string]int, error) {
+	const q = `
+		SELECT product_id, quantity
+		FROM operations.order_items
+		WHERE order_id = $1`
+
+	rows, err := tx.Query(q, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make(map[string]int)
+	for rows.Next() {
+		var productID string
+		var quantity int
+		if err := rows.Scan(&productID, &quantity); err != nil {
+			return nil, err
+		}
+		items[productID] += quantity
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return items, nil
+}
+
+func applyStockMovementTx(tx *sql.Tx, operationType, locationID string, items map[string]int) error {
+	if len(items) == 0 {
+		return ErrOperationItemsRequired
+	}
+
+	normalizedLocationID := strings.TrimSpace(locationID)
+	for productID, quantity := range items {
+		if quantity <= 0 {
+			continue
+		}
+
+		delta := quantity
+		if operationType == "OUT" {
+			delta = -quantity
+		}
+
+		if err := applyProductQuantityDeltaTx(tx, strings.TrimSpace(productID), normalizedLocationID, delta); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func applyProductQuantityDeltaTx(tx *sql.Tx, productID, locationID string, delta int) error {
+	const selectQuery = `
+		SELECT COALESCE(stock_levels, '[]'::jsonb)
+		FROM stocks.products
+		WHERE id = $1
+		FOR UPDATE`
+
+	var rawStockLevels []byte
+	if err := tx.QueryRow(selectQuery, productID).Scan(&rawStockLevels); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrOperationProductInvalid
+		}
+		return err
+	}
+
+	levels, err := unmarshalProductStockLevels(rawStockLevels)
+	if err != nil {
+		return err
+	}
+
+	normalizedLocationID := strings.TrimSpace(locationID)
+	levelIndex := -1
+	for index := range levels {
+		if strings.TrimSpace(levels[index].LocationID) == normalizedLocationID {
+			levelIndex = index
+			break
+		}
+	}
+
+	if levelIndex == -1 {
+		if delta < 0 {
+			return ErrOperationStockInsufficient
+		}
+		levels = append(levels, models.ProductStockLevel{
+			LocationID:        normalizedLocationID,
+			OnHandQuantity:    delta,
+			FreeToUseQuantity: delta,
+		})
+	} else {
+		updatedOnHand := levels[levelIndex].OnHandQuantity + delta
+		updatedFreeToUse := levels[levelIndex].FreeToUseQuantity + delta
+		if updatedOnHand < 0 || updatedFreeToUse < 0 {
+			return ErrOperationStockInsufficient
+		}
+		levels[levelIndex].OnHandQuantity = updatedOnHand
+		levels[levelIndex].FreeToUseQuantity = updatedFreeToUse
+	}
+
+	updatedInputs := make([]ProductStockLevelInput, 0, len(levels))
+	for _, level := range levels {
+		updatedInputs = append(updatedInputs, ProductStockLevelInput{
+			LocationID:        strings.TrimSpace(level.LocationID),
+			OnHandQuantity:    level.OnHandQuantity,
+			FreeToUseQuantity: level.FreeToUseQuantity,
+		})
+	}
+
+	serializedLevels, err := marshalStockLevels(normalizeStockLevels(updatedInputs))
+	if err != nil {
+		return err
+	}
+
+	const updateQuery = `
+		UPDATE stocks.products
+		SET stock_levels = $2::jsonb, updated_at = NOW()
+		WHERE id = $1`
+
+	if _, err := tx.Exec(updateQuery, productID, serializedLevels); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func ensureOrdersStatusConstraintTx(tx *sql.Tx) error {
+	const q = `
+		DO $$
+		DECLARE
+			status_constraint RECORD;
+		BEGIN
+			FOR status_constraint IN
+				SELECT c.conname
+				FROM pg_constraint c
+				JOIN pg_class t ON t.oid = c.conrelid
+				JOIN pg_namespace n ON n.oid = t.relnamespace
+				WHERE n.nspname = 'operations'
+				  AND t.relname = 'orders'
+				  AND c.contype = 'c'
+				  AND pg_get_constraintdef(c.oid) ILIKE '%status%'
+			LOOP
+				EXECUTE format('ALTER TABLE "operations".orders DROP CONSTRAINT %I', status_constraint.conname);
+			END LOOP;
+
+			IF NOT EXISTS (
+				SELECT 1
+				FROM pg_constraint c
+				JOIN pg_class t ON t.oid = c.conrelid
+				JOIN pg_namespace n ON n.oid = t.relnamespace
+				WHERE n.nspname = 'operations'
+				  AND t.relname = 'orders'
+				  AND c.conname = 'operations_orders_status_check'
+			) THEN
+				EXECUTE '
+					ALTER TABLE "operations".orders
+					ADD CONSTRAINT operations_orders_status_check
+					CHECK (status IN (''DRAFT'', ''WAITING'', ''READY'', ''DONE'', ''CANCELLED''))
+				';
+			END IF;
+		END $$;`
+
+	_, err := tx.Exec(q)
+	return err
+}
+
+func isTerminalOperationStatus(status string) bool {
+	normalized := strings.ToUpper(strings.TrimSpace(status))
+	return normalized == "DONE" || normalized == "CANCELLED"
 }
 
 func resolveWarehouseShortCodeTx(tx *sql.Tx, locationID string) (string, error) {
