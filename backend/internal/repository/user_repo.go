@@ -5,8 +5,9 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/lib/pq"
 	"madhavbhayani/SANCHAY-The-Inventory-OS-for-Modern-Businesses-Inventory-Management-System-IMS/internal/models"
+
+	"github.com/lib/pq"
 )
 
 var (
@@ -65,4 +66,42 @@ func (r *UserRepo) FindByLoginIDOrEmail(identifier string) (*models.User, error)
 		return nil, err
 	}
 	return &u, nil
+}
+
+// FindByID looks up a single user by UUID.
+func (r *UserRepo) FindByID(id string) (*models.User, error) {
+	const q = `
+		SELECT id, login_id, email, password, created_at, updated_at
+		FROM users
+		WHERE id = $1
+		LIMIT 1`
+
+	var u models.User
+	err := r.db.QueryRow(q, id).Scan(
+		&u.ID, &u.LoginID, &u.Email, &u.Password, &u.CreatedAt, &u.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+// UpdatePassword updates the bcrypt password hash for an account.
+func (r *UserRepo) UpdatePassword(userID, hashedPassword string) error {
+	const q = `
+		UPDATE users
+		SET password = $2, updated_at = NOW()
+		WHERE id = $1`
+
+	result, err := r.db.Exec(q, userID, hashedPassword)
+	if err != nil {
+		return err
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return ErrUserNotFound
+	}
+	return nil
 }

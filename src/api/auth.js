@@ -1,18 +1,35 @@
 const BASE = '/api'
 
-/**
- * Internal: POST JSON to a backend endpoint.
- * Throws with the server's error message on non-2xx responses.
- */
-async function post(path, body) {
+async function request(path, { method = 'GET', body, auth = false } = {}) {
+  const headers = { 'Content-Type': 'application/json' }
+
+  if (auth) {
+    const token = getToken()
+    if (!token) {
+      throw new Error('Session expired. Please log in again.')
+    }
+    headers.Authorization = `Bearer ${token}`
+  }
+
   const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    method,
+    headers,
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
-  const data = await res.json()
+
+  let data = {}
+  try {
+    data = await res.json()
+  } catch {
+    data = {}
+  }
+
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`)
   return data
+}
+
+async function post(path, body) {
+  return request(path, { method: 'POST', body })
 }
 
 /**
@@ -31,6 +48,147 @@ export function apiSignup({ loginId, email, password }) {
  */
 export function apiLogin({ identifier, password }) {
   return post('/auth/login', { identifier, password })
+}
+
+/** Get all data required to render the Settings page. */
+export function apiGetSettingsOverview() {
+  return request('/settings', { auth: true })
+}
+
+/** Create a warehouse entry. */
+export function apiCreateWarehouse({ name, shortCode, address, description }) {
+  return request('/settings/warehouses', {
+    method: 'POST',
+    auth: true,
+    body: {
+      name,
+      short_code: shortCode,
+      address,
+      description,
+    },
+  })
+}
+
+/** Create a location and attach one or many warehouses. */
+export function apiCreateLocation({ name, shortCode, warehouseIds }) {
+  return request('/settings/locations', {
+    method: 'POST',
+    auth: true,
+    body: {
+      name,
+      short_code: shortCode,
+      warehouse_ids: warehouseIds,
+    },
+  })
+}
+
+/** Change the authenticated user's password. */
+export function apiChangePassword({ currentPassword, newPassword }) {
+  return request('/settings/change-password', {
+    method: 'POST',
+    auth: true,
+    body: {
+      current_password: currentPassword,
+      new_password: newPassword,
+    },
+  })
+}
+
+/** Fetch categories and location options required for stock operations. */
+export function apiGetStockMeta() {
+  return request('/stocks/meta', { auth: true })
+}
+
+/** Create a product category in stocks.categories. */
+export function apiCreateStockCategory({ name, description }) {
+  return request('/stocks/categories', {
+    method: 'POST',
+    auth: true,
+    body: {
+      name,
+      description,
+    },
+  })
+}
+
+/** Query products with server-side search. */
+export function apiListStockProducts({ query = '', limit = 120 } = {}) {
+  const params = new URLSearchParams()
+  if (query.trim()) params.set('q', query.trim())
+  params.set('limit', String(limit))
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  return request(`/stocks/products${suffix}`, { auth: true })
+}
+
+/** Create a product in stocks.products. */
+export function apiCreateStockProduct(payload) {
+  return request('/stocks/products', {
+    method: 'POST',
+    auth: true,
+    body: payload,
+  })
+}
+
+/** Update an existing product by id. */
+export function apiUpdateStockProduct(productId, payload) {
+  return request(`/stocks/products/${productId}`, {
+    method: 'PUT',
+    auth: true,
+    body: payload,
+  })
+}
+
+/** Delete a product by id. */
+export function apiDeleteStockProduct(productId) {
+  return request(`/stocks/products/${productId}`, {
+    method: 'DELETE',
+    auth: true,
+  })
+}
+
+/** Fetch location and product options required for operations forms. */
+export function apiGetOperationsMeta() {
+  return request('/operations/meta', { auth: true })
+}
+
+/** List receipt orders (operation type IN). */
+export function apiListReceiptOrders({ limit = 120 } = {}) {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  return request(`/operations/receipts?${params.toString()}`, { auth: true })
+}
+
+/** Create a new receipt order (operation type IN). */
+export function apiCreateReceiptOrder(payload) {
+  return request('/operations/receipts', {
+    method: 'POST',
+    auth: true,
+    body: payload,
+  })
+}
+
+/** List delivery orders (operation type OUT). */
+export function apiListDeliveryOrders({ limit = 120 } = {}) {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  return request(`/operations/delivery?${params.toString()}`, { auth: true })
+}
+
+/** Create a new delivery order (operation type OUT). */
+export function apiCreateDeliveryOrder(payload) {
+  return request('/operations/delivery', {
+    method: 'POST',
+    auth: true,
+    body: payload,
+  })
+}
+
+/** Delete an operations order by id. */
+export function apiDeleteOperationOrder(orderId) {
+  return request(`/operations/orders/${orderId}`, {
+    method: 'DELETE',
+    auth: true,
+  })
 }
 
 /** Persist JWT + user info to localStorage after successful auth. */

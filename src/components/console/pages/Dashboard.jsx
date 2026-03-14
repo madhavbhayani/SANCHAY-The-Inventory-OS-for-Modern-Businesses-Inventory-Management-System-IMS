@@ -1,16 +1,8 @@
-import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { clearSession, getToken, getUser } from '../../api/auth'
+import { clearSession, getUser } from '../../../api/auth'
 
 function Dashboard() {
   const navigate = useNavigate()
-
-  useEffect(() => {
-    if (!getToken()) {
-      navigate('/login', { replace: true })
-    }
-  }, [navigate])
-
   const user = getUser()
 
   const handleLogout = () => {
@@ -20,34 +12,32 @@ function Dashboard() {
 
   return (
     <div style={{
-      minHeight: '100vh',
-      background: '#fafaf7',
+      padding: '40px 24px',
       fontFamily: "'Plus Jakarta Sans', sans-serif",
       display: 'flex',
       flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: '16px',
+      gap: '12px',
     }}>
-      <h1 style={{ color: '#1a3a2a', margin: 0 }}>
-        Welcome, {user?.login_id || 'User'}!
+      <h1 style={{ color: 'var(--color-forest)', margin: 0, fontSize: '1.6rem', fontWeight: 700 }}>
+        Welcome back, {user?.login_id || 'User'}
       </h1>
-      <p style={{ color: '#7a7060', margin: 0 }}>
-        Sanchay IMS Dashboard — coming soon.
+      <p style={{ color: 'var(--color-muted)', margin: 0, fontSize: '0.95rem' }}>
+        Sanchay IMS — your inventory at a glance.
       </p>
       <button
         onClick={handleLogout}
         style={{
           marginTop: '8px',
-          padding: '10px 24px',
-          background: '#1a3a2a',
+          padding: '10px 20px',
+          background: 'var(--color-forest)',
           color: '#fafaf7',
           border: 'none',
-          borderRadius: '10px',
+          borderRadius: 'var(--radius-md)',
           fontSize: '14px',
           fontWeight: 600,
           cursor: 'pointer',
           fontFamily: 'inherit',
+          alignSelf: 'flex-start',
         }}
       >
         Log Out

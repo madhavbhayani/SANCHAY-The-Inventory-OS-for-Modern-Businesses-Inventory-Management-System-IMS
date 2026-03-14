@@ -38,3 +38,42 @@ func (r *HistoryRepo) Record(entry *models.LoginHistory) error {
 	)
 	return err
 }
+
+// ListByUserID returns recent login attempts for a specific user.
+func (r *HistoryRepo) ListByUserID(userID string, limit int) ([]models.LoginHistoryItem, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+
+	const q = `
+		SELECT id, COALESCE(ip_address, ''), COALESCE(browser, 'Unknown'), COALESCE(os, 'Unknown'), success,
+			COALESCE(failure_reason, ''), created_at
+		FROM login_history
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2`
+
+	rows, err := r.db.Query(q, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	history := make([]models.LoginHistoryItem, 0)
+	for rows.Next() {
+		var item models.LoginHistoryItem
+		if err := rows.Scan(
+			&item.ID,
+			&item.IPAddress,
+			&item.Browser,
+			&item.OS,
+			&item.Success,
+			&item.FailureReason,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		history = append(history, item)
+	}
+	return history, rows.Err()
+}

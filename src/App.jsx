@@ -2,7 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import Login from './components/auth/Login'
 import Signup from './components/auth/Signup'
-import Dashboard from './components/dashboard/Dashboard'
+import ConsoleLayout from './components/console/ConsoleLayout'
+import Dashboard from './components/console/pages/Dashboard'
+import MoveHistory from './components/console/pages/MoveHistory'
+import OperationCreateOrder from './components/console/pages/OperationCreateOrder'
+import OperationDetail from './components/console/pages/OperationDetail'
+import Operations from './components/console/pages/Operations'
+import Settings from './components/console/pages/Settings'
+import Stock from './components/console/pages/Stock'
 import Footer from './components/landing/Footer'
 import Hero from './components/landing/Hero'
 import Navbar from './components/landing/Navbar'
@@ -98,7 +105,14 @@ function App() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
-      <Route path="/dashboard" element={<Dashboard />} />
+      <Route path="/dashboard" element={<ConsoleLayout><Dashboard /></ConsoleLayout>} />
+      <Route path="/operations" element={<ConsoleLayout><Operations /></ConsoleLayout>} />
+      <Route path="/operations/receipts/create" element={<ConsoleLayout showBottomNav={false}><OperationCreateOrder mode="receipt" /></ConsoleLayout>} />
+      <Route path="/operations/delivery/create" element={<ConsoleLayout showBottomNav={false}><OperationCreateOrder mode="delivery" /></ConsoleLayout>} />
+      <Route path="/operations/:operationType/:referenceNumber" element={<ConsoleLayout showBottomNav={false}><OperationDetail /></ConsoleLayout>} />
+      <Route path="/stock" element={<ConsoleLayout><Stock /></ConsoleLayout>} />
+      <Route path="/move-history" element={<ConsoleLayout><MoveHistory /></ConsoleLayout>} />
+      <Route path="/settings" element={<ConsoleLayout><Settings /></ConsoleLayout>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

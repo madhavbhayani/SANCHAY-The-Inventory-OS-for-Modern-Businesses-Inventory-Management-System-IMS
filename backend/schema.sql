@@ -4,14 +4,26 @@
 
 -- gen_random_uuid() is built-in since PostgreSQL 13+
 
--- ── Schema ───────────────────────────────────────────────────────────────────
--- All Sanchay IMS objects live in the "users" schema, not the default public.
+-- ── Schemas ──────────────────────────────────────────────────────────────────
+-- Auth/account objects live in "users".
+-- Warehouse/location setup objects live in "locations".
+-- Product inventory objects live in "stocks".
+-- Receipts and delivery operations live in "operations".
 
 CREATE SCHEMA IF NOT EXISTS "users";
+CREATE SCHEMA IF NOT EXISTS "locations";
+CREATE SCHEMA IF NOT EXISTS "stocks";
+CREATE SCHEMA IF NOT EXISTS "operations";
 
 -- Let the postgres role use and create within this schema.
 GRANT USAGE  ON SCHEMA "users" TO postgres;
 GRANT CREATE ON SCHEMA "users" TO postgres;
+GRANT USAGE  ON SCHEMA "locations" TO postgres;
+GRANT CREATE ON SCHEMA "locations" TO postgres;
+GRANT USAGE  ON SCHEMA "stocks" TO postgres;
+GRANT CREATE ON SCHEMA "stocks" TO postgres;
+GRANT USAGE  ON SCHEMA "operations" TO postgres;
+GRANT CREATE ON SCHEMA "operations" TO postgres;
 
 -- ── Drop old public-schema tables if they were created before this migration ─
 DROP TABLE IF EXISTS public.login_history;
@@ -45,3 +57,130 @@ CREATE TABLE IF NOT EXISTS "users".login_history (
 
 CREATE INDEX IF NOT EXISTS idx_login_history_user_id    ON "users".login_history (user_id);
 CREATE INDEX IF NOT EXISTS idx_login_history_created_at ON "users".login_history (created_at DESC);
+
+-- Move older settings tables from "users" schema to "locations" schema when
+-- upgrading an existing database.
+DO $$
+BEGIN
+    IF to_regclass('users.warehouses') IS NOT NULL AND to_regclass('locations.warehouses') IS NULL THEN
+        EXECUTE 'ALTER TABLE "users".warehouses SET SCHEMA "locations"';
+    END IF;
+
+    IF to_regclass('users.locations') IS NOT NULL AND to_regclass('locations.locations') IS NULL THEN
+        EXECUTE 'ALTER TABLE "users".locations SET SCHEMA "locations"';
+    END IF;
+
+    IF to_regclass('users.location_warehouses') IS NOT NULL AND to_regclass('locations.location_warehouses') IS NULL THEN
+        EXECUTE 'ALTER TABLE "users".location_warehouses SET SCHEMA "locations"';
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS "locations".warehouses (
+    id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         VARCHAR(120) NOT NULL,
+    short_code   VARCHAR(30)  NOT NULL UNIQUE,
+    address      TEXT,
+    description  TEXT,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_warehouses_name       ON "locations".warehouses (name);
+CREATE INDEX IF NOT EXISTS idx_warehouses_short_code ON "locations".warehouses (short_code);
+
+CREATE TABLE IF NOT EXISTS "locations".locations (
+    id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         VARCHAR(120) NOT NULL,
+    short_code   VARCHAR(30)  NOT NULL UNIQUE,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_locations_name       ON "locations".locations (name);
+CREATE INDEX IF NOT EXISTS idx_locations_short_code ON "locations".locations (short_code);
+
+-- Join table that maps one location to one or many warehouses.
+CREATE TABLE IF NOT EXISTS "locations".location_warehouses (
+    location_id   UUID        NOT NULL REFERENCES "locations".locations(id) ON DELETE CASCADE,
+    warehouse_id  UUID        NOT NULL REFERENCES "locations".warehouses(id) ON DELETE RESTRICT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (location_id, warehouse_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_location_warehouses_location_id  ON "locations".location_warehouses (location_id);
+CREATE INDEX IF NOT EXISTS idx_location_warehouses_warehouse_id ON "locations".location_warehouses (warehouse_id);
+
+CREATE TABLE IF NOT EXISTS "stocks".categories (
+    id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         VARCHAR(120) NOT NULL UNIQUE,
+    description  TEXT,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_stocks_categories_name ON "stocks".categories (name);
+
+INSERT INTO "stocks".categories (name, description)
+VALUES
+    ('Raw Material', 'Materials used as input for production'),
+    ('Finished Goods', 'Final sellable inventory items'),
+    ('Consumables', 'Operational use items with regular consumption'),
+    ('Packaging', 'Packaging and handling inventory')
+ON CONFLICT (name) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS "stocks".products (
+    id                     UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
+    sku                    VARCHAR(80)    NOT NULL UNIQUE DEFAULT ('SKU/' || UPPER(SUBSTRING(REPLACE(gen_random_uuid()::text, '-', '') FROM 1 FOR 12))),
+    name                   VARCHAR(180)   NOT NULL,
+    cost                   NUMERIC(12,2)  NOT NULL CHECK (cost >= 0),
+    on_hand_quantity       INTEGER        NOT NULL CHECK (on_hand_quantity >= 0),
+    free_to_use_quantity   INTEGER        NOT NULL CHECK (free_to_use_quantity >= 0),
+    category_id            UUID           NOT NULL REFERENCES "stocks".categories(id) ON DELETE RESTRICT,
+    location_id            UUID           NOT NULL REFERENCES "locations".locations(id) ON DELETE RESTRICT,
+    description            TEXT,
+    created_at             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    updated_at             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    CHECK (free_to_use_quantity <= on_hand_quantity)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stocks_products_name         ON "stocks".products (name);
+CREATE INDEX IF NOT EXISTS idx_stocks_products_sku          ON "stocks".products (sku);
+CREATE INDEX IF NOT EXISTS idx_stocks_products_category_id  ON "stocks".products (category_id);
+CREATE INDEX IF NOT EXISTS idx_stocks_products_location_id  ON "stocks".products (location_id);
+CREATE INDEX IF NOT EXISTS idx_stocks_products_updated_at   ON "stocks".products (updated_at DESC);
+
+CREATE SEQUENCE IF NOT EXISTS "operations".reference_seq START WITH 1 INCREMENT BY 1;
+
+CREATE TABLE IF NOT EXISTS "operations".orders (
+    id                    BIGSERIAL      PRIMARY KEY,
+    reference_sequence    BIGINT         NOT NULL UNIQUE,
+    reference_number      VARCHAR(120)   NOT NULL UNIQUE,
+    operation_type        VARCHAR(3)     NOT NULL CHECK (operation_type IN ('IN', 'OUT')),
+    from_party            VARCHAR(180),
+    to_party              VARCHAR(180),
+    location_id           UUID           NOT NULL REFERENCES "locations".locations(id) ON DELETE RESTRICT,
+    warehouse_short_code  VARCHAR(30)    NOT NULL,
+    contact_number        VARCHAR(32),
+    scheduled_date        DATE           NOT NULL,
+    status                VARCHAR(20)    NOT NULL CHECK (status IN ('DRAFT', 'WAITING', 'READY', 'DONE')),
+    created_at            TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_operations_orders_reference_number ON "operations".orders (reference_number);
+CREATE INDEX IF NOT EXISTS idx_operations_orders_operation_type   ON "operations".orders (operation_type);
+CREATE INDEX IF NOT EXISTS idx_operations_orders_location_id      ON "operations".orders (location_id);
+CREATE INDEX IF NOT EXISTS idx_operations_orders_status           ON "operations".orders (status);
+CREATE INDEX IF NOT EXISTS idx_operations_orders_scheduled_date   ON "operations".orders (scheduled_date DESC);
+CREATE INDEX IF NOT EXISTS idx_operations_orders_created_at       ON "operations".orders (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS "operations".order_items (
+    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id      BIGINT      NOT NULL REFERENCES "operations".orders(id) ON DELETE CASCADE,
+    product_id    UUID        NOT NULL REFERENCES "stocks".products(id) ON DELETE RESTRICT,
+    quantity      INTEGER     NOT NULL CHECK (quantity > 0),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (order_id, product_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_operations_order_items_order_id   ON "operations".order_items (order_id);
+CREATE INDEX IF NOT EXISTS idx_operations_order_items_product_id ON "operations".order_items (product_id);
