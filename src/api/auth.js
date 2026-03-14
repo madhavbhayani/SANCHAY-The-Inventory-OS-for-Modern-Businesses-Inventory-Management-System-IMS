@@ -55,6 +55,11 @@ export function apiGetSettingsOverview() {
   return request('/settings', { auth: true })
 }
 
+/** Fetch dashboard counters and chart datasets. */
+export function apiGetDashboardOverview() {
+  return request('/dashboard/overview', { auth: true })
+}
+
 /** Create a warehouse entry. */
 export function apiCreateWarehouse({ name, shortCode, address, description }) {
   return request('/settings/warehouses', {
@@ -152,9 +157,12 @@ export function apiGetOperationsMeta() {
 }
 
 /** List receipt orders (operation type IN). */
-export function apiListReceiptOrders({ limit = 120 } = {}) {
+export function apiListReceiptOrders({ limit = 120, query = '' } = {}) {
   const params = new URLSearchParams()
   params.set('limit', String(limit))
+  if (String(query || '').trim()) {
+    params.set('q', String(query).trim())
+  }
   return request(`/operations/receipts?${params.toString()}`, { auth: true })
 }
 
@@ -168,9 +176,12 @@ export function apiCreateReceiptOrder(payload) {
 }
 
 /** List delivery orders (operation type OUT). */
-export function apiListDeliveryOrders({ limit = 120 } = {}) {
+export function apiListDeliveryOrders({ limit = 120, query = '' } = {}) {
   const params = new URLSearchParams()
   params.set('limit', String(limit))
+  if (String(query || '').trim()) {
+    params.set('q', String(query).trim())
+  }
   return request(`/operations/delivery?${params.toString()}`, { auth: true })
 }
 
@@ -206,6 +217,36 @@ export function apiAdjustStockQuantity(payload) {
     auth: true,
     body: payload,
   })
+}
+
+/** Query stock ledger move history with optional filters. */
+export function apiListMoveHistory({
+  limit = 200,
+  eventType = '',
+  status = '',
+  query = '',
+  fromDate = '',
+  toDate = '',
+} = {}) {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  if (String(eventType || '').trim()) {
+    params.set('event_type', String(eventType).trim())
+  }
+  if (String(status || '').trim()) {
+    params.set('status', String(status).trim())
+  }
+  if (String(query || '').trim()) {
+    params.set('q', String(query).trim())
+  }
+  if (String(fromDate || '').trim()) {
+    params.set('from_date', String(fromDate).trim())
+  }
+  if (String(toDate || '').trim()) {
+    params.set('to_date', String(toDate).trim())
+  }
+
+  return request(`/move-history?${params.toString()}`, { auth: true })
 }
 
 /** Delete an operations order by id. */

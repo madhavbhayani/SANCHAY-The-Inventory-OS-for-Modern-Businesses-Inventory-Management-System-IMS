@@ -15,6 +15,7 @@ CREATE SCHEMA IF NOT EXISTS "locations";
 CREATE SCHEMA IF NOT EXISTS "stocks";
 CREATE SCHEMA IF NOT EXISTS "operations";
 CREATE SCHEMA IF NOT EXISTS "adjustments";
+CREATE SCHEMA IF NOT EXISTS "movehistory";
 
 -- Let the postgres role use and create within this schema.
 GRANT USAGE  ON SCHEMA "users" TO postgres;
@@ -27,6 +28,8 @@ GRANT USAGE  ON SCHEMA "operations" TO postgres;
 GRANT CREATE ON SCHEMA "operations" TO postgres;
 GRANT USAGE  ON SCHEMA "adjustments" TO postgres;
 GRANT CREATE ON SCHEMA "adjustments" TO postgres;
+GRANT USAGE  ON SCHEMA "movehistory" TO postgres;
+GRANT CREATE ON SCHEMA "movehistory" TO postgres;
 
 -- ── Drop old public-schema tables if they were created before this migration ─
 DROP TABLE IF EXISTS public.login_history;
@@ -333,3 +336,38 @@ CREATE INDEX IF NOT EXISTS idx_adjustments_internal_transfer_history_from_locati
     ON "adjustments".internal_transfer_history (from_location_id);
 CREATE INDEX IF NOT EXISTS idx_adjustments_internal_transfer_history_to_location_id
     ON "adjustments".internal_transfer_history (to_location_id);
+
+CREATE TABLE IF NOT EXISTS "movehistory".stock_ledger (
+    id                               UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_type                       VARCHAR(40)  NOT NULL CHECK (event_type IN ('RECEIPT', 'DELIVERY', 'INTERNAL_TRANSFER', 'QUANTITY_ADJUSTMENT')),
+    operation_type                   VARCHAR(3)   CHECK (operation_type IN ('IN', 'OUT')),
+    order_id                         BIGINT       REFERENCES "operations".orders(id) ON DELETE SET NULL,
+    reference_number                 VARCHAR(120),
+    product_id                       UUID         NOT NULL REFERENCES "stocks".products(id) ON DELETE RESTRICT,
+    location_id                      UUID         REFERENCES "locations".locations(id) ON DELETE RESTRICT,
+    from_location_id                 UUID         REFERENCES "locations".locations(id) ON DELETE RESTRICT,
+    to_location_id                   UUID         REFERENCES "locations".locations(id) ON DELETE RESTRICT,
+    quantity_on_hand_delta           INTEGER      NOT NULL DEFAULT 0,
+    quantity_free_to_use_delta       INTEGER      NOT NULL DEFAULT 0,
+    previous_on_hand_quantity        INTEGER      NOT NULL DEFAULT 0 CHECK (previous_on_hand_quantity >= 0),
+    current_on_hand_quantity         INTEGER      NOT NULL DEFAULT 0 CHECK (current_on_hand_quantity >= 0),
+    previous_free_to_use_quantity    INTEGER      NOT NULL DEFAULT 0 CHECK (previous_free_to_use_quantity >= 0),
+    current_free_to_use_quantity     INTEGER      NOT NULL DEFAULT 0 CHECK (current_free_to_use_quantity >= 0),
+    previous_status                  VARCHAR(20),
+    current_status                   VARCHAR(20),
+    reason                           TEXT,
+    created_at                       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_movehistory_stock_ledger_event_type
+    ON "movehistory".stock_ledger (event_type);
+CREATE INDEX IF NOT EXISTS idx_movehistory_stock_ledger_created_at
+    ON "movehistory".stock_ledger (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_movehistory_stock_ledger_reference_number
+    ON "movehistory".stock_ledger (reference_number);
+CREATE INDEX IF NOT EXISTS idx_movehistory_stock_ledger_product_id
+    ON "movehistory".stock_ledger (product_id);
+CREATE INDEX IF NOT EXISTS idx_movehistory_stock_ledger_location_id
+    ON "movehistory".stock_ledger (location_id);
+CREATE INDEX IF NOT EXISTS idx_movehistory_stock_ledger_current_status
+    ON "movehistory".stock_ledger (current_status);

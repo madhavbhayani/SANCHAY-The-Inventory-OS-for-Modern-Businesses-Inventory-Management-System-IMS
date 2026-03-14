@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import {
   apiAdjustStockQuantity,
-  apiGetAdjustmentsOverview,
   apiDeleteOperationOrder,
+  apiGetAdjustmentsOverview,
   apiListDeliveryOrders,
   apiListReceiptOrders,
   apiTransferAdjustmentStock,
@@ -16,16 +16,33 @@ const OPERATIONS_TABS = [
   { id: 'adjustments', label: 'Adjustments', subtitle: 'Internal Transfers', path: '/operations/adjustments' },
 ]
 
+const ORDER_KANBAN_COLUMNS = [
+  { id: 'DRAFT', label: 'Draft' },
+  { id: 'WAITING', label: 'Waiting' },
+  { id: 'READY', label: 'Ready' },
+  { id: 'DONE', label: 'Done' },
+  { id: 'CANCELLED', label: 'Cancelled' },
+  { id: 'OTHER', label: 'Other' },
+]
+
+const ORDER_LIMIT = 180
+
 function Operations({ activeTab = 'receipts' }) {
   const location = useLocation()
+
   const [isBootstrapping, setIsBootstrapping] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [feedback, setFeedback] = useState({ type: '', message: '' })
 
+  const [viewMode, setViewMode] = useState('list')
+  const [receiptQueryInput, setReceiptQueryInput] = useState('')
+  const [receiptQueryApplied, setReceiptQueryApplied] = useState('')
+
   const [receipts, setReceipts] = useState([])
   const [deliveries, setDeliveries] = useState([])
   const [deletingOrderId, setDeletingOrderId] = useState('')
+
   const [adjustmentsOverview, setAdjustmentsOverview] = useState({
     locations: [],
     rows: [],
@@ -38,26 +55,32 @@ function Operations({ activeTab = 'receipts' }) {
   const currentPath = location.pathname
 
   useEffect(() => {
+    setFeedback({ type: '', message: '' })
+
     if (activeTab === 'adjustments') {
       bootstrapAdjustments()
       return
     }
 
-    bootstrapOrders()
+    bootstrapOrders(receiptQueryApplied)
   }, [activeTab])
 
-  const bootstrapOrders = async () => {
+  const loadOrders = async (queryText = '') => {
+    const [receiptResponse, deliveryResponse] = await Promise.all([
+      apiListReceiptOrders({ limit: ORDER_LIMIT, query: queryText }),
+      apiListDeliveryOrders({ limit: ORDER_LIMIT }),
+    ])
+
+    setReceipts(receiptResponse.orders || [])
+    setDeliveries(deliveryResponse.orders || [])
+  }
+
+  const bootstrapOrders = async (queryText = receiptQueryApplied) => {
     setIsBootstrapping(true)
     setLoadError('')
 
     try {
-      const [receiptResponse, deliveryResponse] = await Promise.all([
-        apiListReceiptOrders({ limit: 180 }),
-        apiListDeliveryOrders({ limit: 180 }),
-      ])
-
-      setReceipts(receiptResponse.orders || [])
-      setDeliveries(deliveryResponse.orders || [])
+      await loadOrders(queryText)
     } catch (error) {
       setLoadError(error?.message || 'Failed to load operations data.')
     } finally {
@@ -98,13 +121,7 @@ function Operations({ activeTab = 'receipts' }) {
         })
         setAdjustmentDrafts({})
       } else {
-        const [receiptResponse, deliveryResponse] = await Promise.all([
-          apiListReceiptOrders({ limit: 180 }),
-          apiListDeliveryOrders({ limit: 180 }),
-        ])
-
-        setReceipts(receiptResponse.orders || [])
-        setDeliveries(deliveryResponse.orders || [])
+        await loadOrders(receiptQueryApplied)
       }
     } catch (error) {
       setLoadError(
@@ -113,6 +130,37 @@ function Operations({ activeTab = 'receipts' }) {
             ? 'Failed to refresh adjustments data.'
             : 'Failed to refresh operations data.'),
       )
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  const submitReceiptSearch = async (event) => {
+    event.preventDefault()
+    const nextQuery = receiptQueryInput.trim()
+    setReceiptQueryApplied(nextQuery)
+
+    setRefreshing(true)
+    setLoadError('')
+    try {
+      await loadOrders(nextQuery)
+    } catch (error) {
+      setLoadError(error?.message || 'Failed to search receipt orders.')
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  const clearReceiptSearch = async () => {
+    setReceiptQueryInput('')
+    setReceiptQueryApplied('')
+
+    setRefreshing(true)
+    setLoadError('')
+    try {
+      await loadOrders('')
+    } catch (error) {
+      setLoadError(error?.message || 'Failed to clear receipt search.')
     } finally {
       setRefreshing(false)
     }
@@ -246,7 +294,34 @@ function Operations({ activeTab = 'receipts' }) {
 
   const activeOrders = activeTab === 'receipts' ? receipts : deliveries
   const activeEmptyMessage =
-    activeTab === 'receipts' ? 'No receipt orders created yet.' : 'No delivery orders created yet.'
+    activeTab === 'receipts' && receiptQueryApplied
+      ? 'No receipt orders found for this search.'
+      : activeTab === 'receipts'
+        ? 'No receipt orders created yet.'
+        : 'No delivery orders created yet.'
+
+  const createPath = activeTab === 'receipts' ? '/operations/receipts/create' : '/operations/delivery/create'
+  const createLabel = activeTab === 'receipts' ? 'Create Receipt' : 'Create Delivery'
+  const sectionTitle = activeTab === 'receipts' ? 'Receipt Orders' : 'Delivery Orders'
+  const sectionDescription =
+    activeTab === 'receipts'
+      ? 'Incoming goods planned for warehouse receipt.'
+      : 'Outgoing goods and shipment intent.'
+
+  const kanbanColumns = useMemo(() => {
+    const grouped = activeOrders.reduce((result, order) => {
+      const key = resolveKanbanStatus(order)
+      return {
+        ...result,
+        [key]: [...(result[key] || []), order],
+      }
+    }, {})
+
+    return ORDER_KANBAN_COLUMNS.map((column) => ({
+      ...column,
+      orders: grouped[column.id] || [],
+    })).filter((column) => column.id !== 'OTHER' || column.orders.length > 0)
+  }, [activeOrders])
 
   if (isBootstrapping) {
     return (
@@ -271,7 +346,7 @@ function Operations({ activeTab = 'receipts' }) {
           <button
             type="button"
             className="operations-btn primary"
-            onClick={activeTab === 'adjustments' ? bootstrapAdjustments : bootstrapOrders}
+            onClick={activeTab === 'adjustments' ? bootstrapAdjustments : () => bootstrapOrders(receiptQueryApplied)}
           >
             Retry
           </button>
@@ -290,12 +365,7 @@ function Operations({ activeTab = 'receipts' }) {
             Track incoming orders, outbound deliveries, and internal stock corrections in one place.
           </p>
         </div>
-        <button
-          type="button"
-          className="operations-btn secondary"
-          onClick={refreshData}
-          disabled={refreshing}
-        >
+        <button type="button" className="operations-btn secondary" onClick={refreshData} disabled={refreshing}>
           {refreshing ? 'Refreshing...' : 'Refresh Data'}
         </button>
       </header>
@@ -316,9 +386,7 @@ function Operations({ activeTab = 'receipts' }) {
       </div>
 
       {feedback.message ? (
-        <p className={`operations-feedback ${feedback.type === 'error' ? 'is-error' : 'is-success'}`}>
-          {feedback.message}
-        </p>
+        <p className={`operations-feedback ${feedback.type === 'error' ? 'is-error' : 'is-success'}`}>{feedback.message}</p>
       ) : null}
 
       {loadError ? <p className="operations-feedback is-error">{loadError}</p> : null}
@@ -503,7 +571,7 @@ function Operations({ activeTab = 'receipts' }) {
                         <td>{formatHistoryLocation(entry.to_location_name, entry.to_location_short_code)}</td>
                         <td>{entry.quantity_changed}</td>
                         <td>
-                          {entry.previous_free_to_use_quantity} → {entry.updated_free_to_use_quantity}
+                          {entry.previous_free_to_use_quantity} -> {entry.updated_free_to_use_quantity}
                         </td>
                         <td>{entry.reason}</td>
                       </tr>
@@ -514,93 +582,67 @@ function Operations({ activeTab = 'receipts' }) {
             )}
           </div>
         </article>
-      ) : activeTab === 'receipts' ? (
-        <article className="operations-card" role="tabpanel">
-          <div className="operations-list-head">
-            <div>
-              <h2>Receipt Orders</h2>
-              <p>Incoming goods planned for warehouse receipt.</p>
-            </div>
-            <Link to="/operations/receipts/create" state={{ from: currentPath }} className="operations-btn primary">
-              Create Receipt
-            </Link>
-          </div>
-
-          {receipts.length === 0 ? (
-            <p className="operations-empty">No receipt orders created yet.</p>
-          ) : (
-            <div className="operations-table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Reference</th>
-                    <th>From</th>
-                    <th>To</th>
-                    <th>Contact</th>
-                    <th>Schedule Date</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {receipts.map((order) => (
-                    <tr key={order.id}>
-                      <td>
-                        <div className="operations-ref-cell">
-                          <span className="operations-ref">{order.reference_number}</span>
-                          <small>Receipt</small>
-                        </div>
-                      </td>
-                      <td>{order.from_party || '--'}</td>
-                      <td>{displayToParty(order)}</td>
-                      <td>{order.contact_number || '--'}</td>
-                      <td>{formatDate(order.scheduled_date)}</td>
-                      <td>
-                        <span className={`operations-status ${statusClassName(order.status)}`}>
-                          {toTitleCase(order.status)}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="operations-row-actions">
-                          <Link
-                            to={buildOrderDetailPath(order.operation_type, order.reference_number)}
-                            state={{ from: currentPath }}
-                            className="operations-btn small secondary"
-                          >
-                            View
-                          </Link>
-                          <button
-                            type="button"
-                            className="operations-btn small danger"
-                            disabled={deletingOrderId === String(order.id)}
-                            onClick={() => deleteOrder(order)}
-                          >
-                            {deletingOrderId === String(order.id) ? 'Deleting...' : 'Delete'}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </article>
       ) : (
         <article className="operations-card" role="tabpanel">
           <div className="operations-list-head">
             <div>
-              <h2>Delivery Orders</h2>
-              <p>Outgoing goods and shipment intent.</p>
+              <h2>{sectionTitle}</h2>
+              <p>{sectionDescription}</p>
             </div>
-            <Link to="/operations/delivery/create" state={{ from: currentPath }} className="operations-btn primary">
-              Create Delivery
+            <Link to={createPath} state={{ from: currentPath }} className="operations-btn primary">
+              {createLabel}
             </Link>
           </div>
 
+          <div className="operations-controls-row">
+            {activeTab === 'receipts' ? (
+              <form className="operations-search-form" onSubmit={submitReceiptSearch}>
+                <input
+                  value={receiptQueryInput}
+                  onChange={(event) => setReceiptQueryInput(event.target.value)}
+                  placeholder="Search receipts by ref, party, contact, SKU"
+                />
+                <button type="submit" className="operations-btn small secondary" disabled={refreshing}>
+                  Search
+                </button>
+                <button
+                  type="button"
+                  className="operations-btn small ghost"
+                  onClick={clearReceiptSearch}
+                  disabled={refreshing || (!receiptQueryInput && !receiptQueryApplied)}
+                >
+                  Clear
+                </button>
+              </form>
+            ) : (
+              <div />
+            )}
+
+            <div className="operations-view-toggle" aria-label="Order view selector">
+              <button
+                type="button"
+                className={`operations-view-btn${viewMode === 'list' ? ' is-active' : ''}`}
+                onClick={() => setViewMode('list')}
+              >
+                List View
+              </button>
+              <button
+                type="button"
+                className={`operations-view-btn${viewMode === 'kanban' ? ' is-active' : ''}`}
+                onClick={() => setViewMode('kanban')}
+              >
+                Kanban View
+              </button>
+            </div>
+          </div>
+
+          {activeTab === 'receipts' && receiptQueryApplied ? (
+            <p className="operations-search-meta">Showing receipt search results for: "{receiptQueryApplied}"</p>
+          ) : null}
+
           {activeOrders.length === 0 ? (
             <p className="operations-empty">{activeEmptyMessage}</p>
-          ) : (
+          ) : viewMode === 'list' ? (
             <div className="operations-table-wrap">
               <table>
                 <thead>
@@ -618,7 +660,10 @@ function Operations({ activeTab = 'receipts' }) {
                   {activeOrders.map((order) => (
                     <tr key={order.id}>
                       <td>
-                        <span className="operations-ref">{order.reference_number}</span>
+                        <div className="operations-ref-cell">
+                          <span className="operations-ref">{order.reference_number}</span>
+                          <small>{String(order.operation_type || '').toUpperCase() === 'OUT' ? 'Delivery' : 'Receipt'}</small>
+                        </div>
                       </td>
                       <td>{order.from_party || '--'}</td>
                       <td>{displayToParty(order)}</td>
@@ -652,6 +697,59 @@ function Operations({ activeTab = 'receipts' }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          ) : (
+            <div className="operations-kanban-board">
+              {kanbanColumns.map((column) => (
+                <section key={column.id} className="operations-kanban-column">
+                  <header>
+                    <h3>{column.label}</h3>
+                    <span>{column.orders.length}</span>
+                  </header>
+
+                  <div className="operations-kanban-cards">
+                    {column.orders.length === 0 ? (
+                      <p className="operations-kanban-empty">No orders</p>
+                    ) : (
+                      column.orders.map((order) => (
+                        <article key={order.id} className="operations-kanban-card">
+                          <div className="operations-kanban-card-top">
+                            <span className="operations-ref">{order.reference_number}</span>
+                            <span className={`operations-status ${statusClassName(order.status)}`}>
+                              {toTitleCase(order.status)}
+                            </span>
+                          </div>
+
+                          <div className="operations-kanban-card-meta">
+                            <p><strong>From:</strong> {order.from_party || '--'}</p>
+                            <p><strong>To:</strong> {displayToParty(order)}</p>
+                            <p><strong>Contact:</strong> {order.contact_number || '--'}</p>
+                            <p><strong>Schedule:</strong> {formatDate(order.scheduled_date)}</p>
+                          </div>
+
+                          <div className="operations-row-actions">
+                            <Link
+                              to={buildOrderDetailPath(order.operation_type, order.reference_number)}
+                              state={{ from: currentPath }}
+                              className="operations-btn small secondary"
+                            >
+                              View
+                            </Link>
+                            <button
+                              type="button"
+                              className="operations-btn small danger"
+                              disabled={deletingOrderId === String(order.id)}
+                              onClick={() => deleteOrder(order)}
+                            >
+                              {deletingOrderId === String(order.id) ? 'Deleting...' : 'Delete'}
+                            </button>
+                          </div>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </section>
+              ))}
             </div>
           )}
         </article>
@@ -711,6 +809,16 @@ function statusClassName(statusValue) {
   if (status === 'DONE') return 'is-done'
   if (status === 'CANCELLED') return 'is-cancelled'
   return ''
+}
+
+function resolveKanbanStatus(order) {
+  const status = String(order?.status || '').toUpperCase()
+  if (status === 'DRAFT') return 'DRAFT'
+  if (status === 'WAITING') return 'WAITING'
+  if (status === 'READY') return 'READY'
+  if (status === 'DONE') return 'DONE'
+  if (status === 'CANCELLED') return 'CANCELLED'
+  return 'OTHER'
 }
 
 function displayToParty(order) {

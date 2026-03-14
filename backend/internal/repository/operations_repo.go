@@ -142,7 +142,7 @@ func (r *OperationsRepo) ListProducts(limit int) ([]models.OperationProductOptio
 	return products, rows.Err()
 }
 
-func (r *OperationsRepo) ListOrders(operationType string, limit int) ([]models.OperationOrder, error) {
+func (r *OperationsRepo) ListOrders(operationType string, limit int, search string) ([]models.OperationOrder, error) {
 	opType := normalizeOperationType(operationType)
 	if opType == "" {
 		return nil, ErrOperationTypeInvalid
@@ -150,6 +150,7 @@ func (r *OperationsRepo) ListOrders(operationType string, limit int) ([]models.O
 	if limit <= 0 || limit > 300 {
 		limit = 120
 	}
+	search = strings.TrimSpace(search)
 
 	const q = `
 		SELECT
@@ -175,15 +176,23 @@ func (r *OperationsRepo) ListOrders(operationType string, limit int) ([]models.O
 		LEFT JOIN locations.location_warehouses lw ON lw.location_id = l.id
 		LEFT JOIN locations.warehouses w ON w.id = lw.warehouse_id
 		WHERE o.operation_type = $1
+		  AND (
+			$2 = ''
+			OR o.reference_number ILIKE '%' || $2 || '%'
+			OR COALESCE(o.from_party, '') ILIKE '%' || $2 || '%'
+			OR COALESCE(o.to_party, '') ILIKE '%' || $2 || '%'
+			OR COALESCE(o.contact_number, '') ILIKE '%' || $2 || '%'
+			OR COALESCE(o.status, '') ILIKE '%' || $2 || '%'
+		)
 		GROUP BY
 			o.id, o.reference_sequence, o.reference_number, o.operation_type,
 			o.from_party, o.to_party, o.location_id, l.name, l.short_code,
 			o.warehouse_short_code, o.contact_number, o.scheduled_date, o.status,
 			o.created_at, o.updated_at
 		ORDER BY o.created_at DESC
-		LIMIT $2`
+		LIMIT $3`
 
-	rows, err := r.db.Query(q, opType, limit)
+	rows, err := r.db.Query(q, opType, search, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +354,13 @@ func (r *OperationsRepo) CreateOrder(input OperationCreateInput) (*models.Operat
 		}
 	}
 
-	if err := applyStockEffectTx(tx, buildOrderStockEffect(opType, status, locationID, aggregatedItems)); err != nil {
+	effect := buildOrderStockEffect(opType, status, locationID, aggregatedItems)
+	stateByKey, err := applyStockEffectTx(tx, effect)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := recordOrderLedgerTx(tx, orderID, referenceNumber, opType, "", status, effect, stateByKey); err != nil {
 		return nil, err
 	}
 
@@ -557,7 +572,13 @@ func (r *OperationsRepo) UpdateOrderByReference(input OperationUpdateInput) (*mo
 
 	currentEffect := buildOrderStockEffect(opType, currentStatus, orderRecord.LocationID, currentItems)
 	newEffect := buildOrderStockEffect(opType, status, locationID, aggregatedItems)
-	if err := applyStockEffectTx(tx, diffStockEffects(currentEffect, newEffect)); err != nil {
+	effectDelta := diffStockEffects(currentEffect, newEffect)
+	stateByKey, err := applyStockEffectTx(tx, effectDelta)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := recordOrderLedgerTx(tx, orderID, ref, opType, currentStatus, status, effectDelta, stateByKey); err != nil {
 		return nil, err
 	}
 
@@ -621,7 +642,13 @@ func (r *OperationsRepo) UpdateOrderStatusByReference(operationType, referenceNu
 	}
 	currentEffect := buildOrderStockEffect(opType, currentStatus, orderRecord.LocationID, items)
 	newEffect := buildOrderStockEffect(opType, normalizedStatus, orderRecord.LocationID, items)
-	if err := applyStockEffectTx(tx, diffStockEffects(currentEffect, newEffect)); err != nil {
+	effectDelta := diffStockEffects(currentEffect, newEffect)
+	stateByKey, err := applyStockEffectTx(tx, effectDelta)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := recordOrderLedgerTx(tx, orderRecord.ID, ref, opType, currentStatus, normalizedStatus, effectDelta, stateByKey); err != nil {
 		return nil, err
 	}
 
@@ -1015,4 +1042,52 @@ func isStatusAllowedForOperation(operationType, status string) bool {
 	}
 
 	return false
+}
+
+func recordOrderLedgerTx(
+	tx *sql.Tx,
+	orderID int64,
+	referenceNumber,
+	operationType,
+	previousStatus,
+	currentStatus string,
+	effect map[stockLevelKey]stockLevelDelta,
+	stateByKey map[stockLevelKey]stockLevelStateSnapshot,
+) error {
+	for key, delta := range effect {
+		if delta.OnHandDelta == 0 && delta.FreeToUseDelta == 0 {
+			continue
+		}
+
+		snapshot := stateByKey[key]
+		if err := insertStockLedgerTx(tx, stockLedgerInsertInput{
+			EventType:                 eventTypeForOperation(operationType),
+			OperationType:             operationType,
+			OrderID:                   orderID,
+			ReferenceNumber:           referenceNumber,
+			ProductID:                 key.ProductID,
+			LocationID:                key.LocationID,
+			FromLocationID:            key.LocationID,
+			ToLocationID:              key.LocationID,
+			OnHandDelta:               delta.OnHandDelta,
+			FreeToUseDelta:            delta.FreeToUseDelta,
+			PreviousOnHandQuantity:    snapshot.PreviousOnHandQuantity,
+			CurrentOnHandQuantity:     snapshot.CurrentOnHandQuantity,
+			PreviousFreeToUseQuantity: snapshot.PreviousFreeToUseQuantity,
+			CurrentFreeToUseQuantity:  snapshot.CurrentFreeToUseQuantity,
+			PreviousStatus:            previousStatus,
+			CurrentStatus:             currentStatus,
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func eventTypeForOperation(operationType string) string {
+	if strings.ToUpper(strings.TrimSpace(operationType)) == "OUT" {
+		return "DELIVERY"
+	}
+	return "RECEIPT"
 }

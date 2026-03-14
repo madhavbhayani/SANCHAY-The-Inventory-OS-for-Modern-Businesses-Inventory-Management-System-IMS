@@ -339,8 +339,9 @@ func (h *OperationsHandler) listOrdersByType(w http.ResponseWriter, r *http.Requ
 			limit = parsed
 		}
 	}
+	search := strings.TrimSpace(r.URL.Query().Get("q"))
 
-	orders, err := h.operations.ListOrders(operationType, limit)
+	orders, err := h.operations.ListOrders(operationType, limit, search)
 	if err != nil {
 		status, message := mapOperationsError(err)
 		if status >= 500 {

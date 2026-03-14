@@ -26,6 +26,8 @@ func main() {
 	stocks := handlers.NewStockHandler(db)
 	operations := handlers.NewOperationsHandler(db)
 	adjustments := handlers.NewAdjustmentsHandler(db)
+	dashboard := handlers.NewDashboardHandler(db)
+	moveHistory := handlers.NewMoveHistoryHandler(db)
 
 	// Go 1.22+ method-pattern routing: method + path pairs are matched exactly.
 	// net/http spawns a goroutine per request — all handlers run in parallel
@@ -37,6 +39,7 @@ func main() {
 	mux.HandleFunc("POST /api/settings/warehouses", settings.CreateWarehouse)
 	mux.HandleFunc("POST /api/settings/locations", settings.CreateLocation)
 	mux.HandleFunc("POST /api/settings/change-password", settings.ChangePassword)
+	mux.HandleFunc("GET /api/dashboard/overview", dashboard.GetOverview)
 	mux.HandleFunc("GET /api/stocks/meta", stocks.GetMeta)
 	mux.HandleFunc("POST /api/stocks/categories", stocks.CreateCategory)
 	mux.HandleFunc("GET /api/stocks/products", stocks.ListProducts)
@@ -56,6 +59,7 @@ func main() {
 	mux.HandleFunc("POST /api/operations/orders/{operationType}/{referenceNumber}/validate", operations.ValidateOrder)
 	mux.HandleFunc("POST /api/operations/orders/{operationType}/{referenceNumber}/cancel", operations.CancelOrder)
 	mux.HandleFunc("DELETE /api/operations/orders/{id}", operations.DeleteOrder)
+	mux.HandleFunc("GET /api/move-history", moveHistory.List)
 
 	srv := &http.Server{
 		Addr:         ":8080",
@@ -75,6 +79,7 @@ func main() {
 		log.Println("[SERVER]   POST /api/settings/warehouses")
 		log.Println("[SERVER]   POST /api/settings/locations")
 		log.Println("[SERVER]   POST /api/settings/change-password")
+		log.Println("[SERVER]   GET  /api/dashboard/overview")
 		log.Println("[SERVER]   GET  /api/stocks/meta")
 		log.Println("[SERVER]   POST /api/stocks/categories")
 		log.Println("[SERVER]   GET  /api/stocks/products")
@@ -94,6 +99,7 @@ func main() {
 		log.Println("[SERVER]   POST /api/operations/orders/{operationType}/{referenceNumber}/validate")
 		log.Println("[SERVER]   POST /api/operations/orders/{operationType}/{referenceNumber}/cancel")
 		log.Println("[SERVER]   DELETE /api/operations/orders/{id}")
+		log.Println("[SERVER]   GET  /api/move-history")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[FATAL] ListenAndServe: %v", err)
 		}

@@ -196,17 +196,25 @@ func (r *AdjustmentsRepo) TransferStock(input AdjustmentTransferInput) error {
 	if sourceIndex == -1 || sourceBefore < input.Quantity {
 		return ErrAdjustmentStockInsufficient
 	}
+	sourceOnHand := levels[sourceIndex].OnHandQuantity
 
 	levels[sourceIndex].FreeToUseQuantity -= input.Quantity
+	sourceAfter := levels[sourceIndex].FreeToUseQuantity
 
 	destinationIndex := -1
+	destinationBefore := 0
+	destinationOnHand := 0
 	for index := range levels {
 		if strings.TrimSpace(levels[index].LocationID) == toLocationID {
 			destinationIndex = index
+			destinationBefore = levels[index].FreeToUseQuantity
+			destinationOnHand = levels[index].OnHandQuantity
 			break
 		}
 	}
+	destinationAfter := 0
 	if destinationIndex == -1 {
+		destinationAfter = input.Quantity
 		levels = append(levels, models.ProductStockLevel{
 			LocationID:        toLocationID,
 			OnHandQuantity:    0,
@@ -214,9 +222,44 @@ func (r *AdjustmentsRepo) TransferStock(input AdjustmentTransferInput) error {
 		})
 	} else {
 		levels[destinationIndex].FreeToUseQuantity += input.Quantity
+		destinationAfter = levels[destinationIndex].FreeToUseQuantity
 	}
 
 	if err := saveProductStockLevelsTx(tx, productID, levels); err != nil {
+		return err
+	}
+
+	if err := insertStockLedgerTx(tx, stockLedgerInsertInput{
+		EventType:                 "INTERNAL_TRANSFER",
+		ProductID:                 productID,
+		LocationID:                fromLocationID,
+		FromLocationID:            fromLocationID,
+		ToLocationID:              toLocationID,
+		OnHandDelta:               0,
+		FreeToUseDelta:            -input.Quantity,
+		PreviousOnHandQuantity:    sourceOnHand,
+		CurrentOnHandQuantity:     sourceOnHand,
+		PreviousFreeToUseQuantity: sourceBefore,
+		CurrentFreeToUseQuantity:  sourceAfter,
+		Reason:                    reason,
+	}); err != nil {
+		return err
+	}
+
+	if err := insertStockLedgerTx(tx, stockLedgerInsertInput{
+		EventType:                 "INTERNAL_TRANSFER",
+		ProductID:                 productID,
+		LocationID:                toLocationID,
+		FromLocationID:            fromLocationID,
+		ToLocationID:              toLocationID,
+		OnHandDelta:               0,
+		FreeToUseDelta:            input.Quantity,
+		PreviousOnHandQuantity:    destinationOnHand,
+		CurrentOnHandQuantity:     destinationOnHand,
+		PreviousFreeToUseQuantity: destinationBefore,
+		CurrentFreeToUseQuantity:  destinationAfter,
+		Reason:                    reason,
+	}); err != nil {
 		return err
 	}
 
@@ -289,7 +332,25 @@ func (r *AdjustmentsRepo) AdjustFreeToUseQuantity(input AdjustmentQuantityInput)
 	}
 
 	levels[levelIndex].FreeToUseQuantity = input.FreeToUseQuantity
+	currentOnHand := levels[levelIndex].OnHandQuantity
 	if err := saveProductStockLevelsTx(tx, productID, levels); err != nil {
+		return err
+	}
+
+	if err := insertStockLedgerTx(tx, stockLedgerInsertInput{
+		EventType:                 "QUANTITY_ADJUSTMENT",
+		ProductID:                 productID,
+		LocationID:                locationID,
+		FromLocationID:            locationID,
+		ToLocationID:              locationID,
+		OnHandDelta:               0,
+		FreeToUseDelta:            input.FreeToUseQuantity - currentFreeToUse,
+		PreviousOnHandQuantity:    currentOnHand,
+		CurrentOnHandQuantity:     currentOnHand,
+		PreviousFreeToUseQuantity: currentFreeToUse,
+		CurrentFreeToUseQuantity:  input.FreeToUseQuantity,
+		Reason:                    reason,
+	}); err != nil {
 		return err
 	}
 

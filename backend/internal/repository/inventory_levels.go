@@ -19,6 +19,13 @@ type stockLevelDelta struct {
 	FreeToUseDelta int
 }
 
+type stockLevelStateSnapshot struct {
+	PreviousOnHandQuantity    int
+	CurrentOnHandQuantity     int
+	PreviousFreeToUseQuantity int
+	CurrentFreeToUseQuantity  int
+}
+
 func buildOrderStockEffect(operationType, status, locationID string, items map[string]int) map[stockLevelKey]stockLevelDelta {
 	effect := make(map[stockLevelKey]stockLevelDelta)
 	if len(items) == 0 {
@@ -91,9 +98,11 @@ func diffStockEffects(current, next map[stockLevelKey]stockLevelDelta) map[stock
 	return diff
 }
 
-func applyStockEffectTx(tx *sql.Tx, effect map[stockLevelKey]stockLevelDelta) error {
+func applyStockEffectTx(tx *sql.Tx, effect map[stockLevelKey]stockLevelDelta) (map[stockLevelKey]stockLevelStateSnapshot, error) {
+	stateByKey := make(map[stockLevelKey]stockLevelStateSnapshot)
+
 	if len(effect) == 0 {
-		return nil
+		return stateByKey, nil
 	}
 
 	keys := make([]stockLevelKey, 0, len(effect))
@@ -113,18 +122,21 @@ func applyStockEffectTx(tx *sql.Tx, effect map[stockLevelKey]stockLevelDelta) er
 
 	for _, key := range keys {
 		delta := effect[key]
-		if err := applyProductStockLevelDeltaTx(
+		snapshot, err := applyProductStockLevelDeltaTx(
 			tx,
 			key.ProductID,
 			key.LocationID,
 			delta.OnHandDelta,
 			delta.FreeToUseDelta,
-		); err != nil {
-			return err
+		)
+		if err != nil {
+			return nil, err
 		}
+
+		stateByKey[key] = snapshot
 	}
 
-	return nil
+	return stateByKey, nil
 }
 
 func loadProductStockLevelsForUpdateTx(tx *sql.Tx, productID string) ([]models.ProductStockLevel, error) {
@@ -172,14 +184,16 @@ func saveProductStockLevelsTx(tx *sql.Tx, productID string, levels []models.Prod
 	return nil
 }
 
-func applyProductStockLevelDeltaTx(tx *sql.Tx, productID, locationID string, onHandDelta, freeToUseDelta int) error {
+func applyProductStockLevelDeltaTx(tx *sql.Tx, productID, locationID string, onHandDelta, freeToUseDelta int) (stockLevelStateSnapshot, error) {
+	state := stockLevelStateSnapshot{}
+
 	if onHandDelta == 0 && freeToUseDelta == 0 {
-		return nil
+		return state, nil
 	}
 
 	levels, err := loadProductStockLevelsForUpdateTx(tx, productID)
 	if err != nil {
-		return err
+		return state, err
 	}
 
 	normalizedLocationID := strings.TrimSpace(locationID)
@@ -193,22 +207,34 @@ func applyProductStockLevelDeltaTx(tx *sql.Tx, productID, locationID string, onH
 
 	if levelIndex == -1 {
 		if onHandDelta < 0 || freeToUseDelta < 0 {
-			return ErrOperationStockInsufficient
+			return state, ErrOperationStockInsufficient
 		}
+		state.PreviousOnHandQuantity = 0
+		state.PreviousFreeToUseQuantity = 0
+		state.CurrentOnHandQuantity = onHandDelta
+		state.CurrentFreeToUseQuantity = freeToUseDelta
 		levels = append(levels, models.ProductStockLevel{
 			LocationID:        normalizedLocationID,
 			OnHandQuantity:    onHandDelta,
 			FreeToUseQuantity: freeToUseDelta,
 		})
 	} else {
+		state.PreviousOnHandQuantity = levels[levelIndex].OnHandQuantity
+		state.PreviousFreeToUseQuantity = levels[levelIndex].FreeToUseQuantity
 		updatedOnHand := levels[levelIndex].OnHandQuantity + onHandDelta
 		updatedFreeToUse := levels[levelIndex].FreeToUseQuantity + freeToUseDelta
 		if updatedOnHand < 0 || updatedFreeToUse < 0 {
-			return ErrOperationStockInsufficient
+			return state, ErrOperationStockInsufficient
 		}
 		levels[levelIndex].OnHandQuantity = updatedOnHand
 		levels[levelIndex].FreeToUseQuantity = updatedFreeToUse
+		state.CurrentOnHandQuantity = updatedOnHand
+		state.CurrentFreeToUseQuantity = updatedFreeToUse
 	}
 
-	return saveProductStockLevelsTx(tx, productID, levels)
+	if err := saveProductStockLevelsTx(tx, productID, levels); err != nil {
+		return state, err
+	}
+
+	return state, nil
 }

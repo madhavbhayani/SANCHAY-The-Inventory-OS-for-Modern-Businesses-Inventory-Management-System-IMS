@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   apiChangePassword,
   apiCreateLocation,
   apiCreateWarehouse,
   apiGetSettingsOverview,
+  clearSession,
 } from '../../../api/auth'
 import '../../../styles/dashboard/settings.css'
 
@@ -13,6 +15,7 @@ const SETTINGS_TABS = [
 ]
 
 function Settings() {
+  const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState('operations')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -215,6 +218,11 @@ function Settings() {
     } finally {
       setSubmittingPassword(false)
     }
+  }
+
+  const logout = () => {
+    clearSession()
+    navigate('/login', { replace: true })
   }
 
   if (loading) {
@@ -471,6 +479,10 @@ function Settings() {
                   <span>Email</span>
                   <strong>{user?.email || '--'}</strong>
                 </div>
+
+                <button type="button" className="settings-danger-btn" onClick={logout}>
+                  Log Out
+                </button>
               </div>
             </article>
 
