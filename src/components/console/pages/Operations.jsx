@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import {
   apiAdjustStockQuantity,
@@ -38,6 +38,7 @@ function Operations({ activeTab = 'receipts' }) {
   const [viewMode, setViewMode] = useState('list')
   const [receiptQueryInput, setReceiptQueryInput] = useState('')
   const [receiptQueryApplied, setReceiptQueryApplied] = useState('')
+  const receiptQueryAppliedRef = useRef('')
 
   const [receipts, setReceipts] = useState([])
   const [deliveries, setDeliveries] = useState([])
@@ -54,18 +55,7 @@ function Operations({ activeTab = 'receipts' }) {
 
   const currentPath = location.pathname
 
-  useEffect(() => {
-    setFeedback({ type: '', message: '' })
-
-    if (activeTab === 'adjustments') {
-      bootstrapAdjustments()
-      return
-    }
-
-    bootstrapOrders(receiptQueryApplied)
-  }, [activeTab])
-
-  const loadOrders = async (queryText = '') => {
+  const loadOrders = useCallback(async (queryText = '') => {
     const [receiptResponse, deliveryResponse] = await Promise.all([
       apiListReceiptOrders({ limit: ORDER_LIMIT, query: queryText }),
       apiListDeliveryOrders({ limit: ORDER_LIMIT }),
@@ -73,9 +63,9 @@ function Operations({ activeTab = 'receipts' }) {
 
     setReceipts(receiptResponse.orders || [])
     setDeliveries(deliveryResponse.orders || [])
-  }
+  }, [])
 
-  const bootstrapOrders = async (queryText = receiptQueryApplied) => {
+  const bootstrapOrders = useCallback(async (queryText = '') => {
     setIsBootstrapping(true)
     setLoadError('')
 
@@ -86,9 +76,9 @@ function Operations({ activeTab = 'receipts' }) {
     } finally {
       setIsBootstrapping(false)
     }
-  }
+  }, [loadOrders])
 
-  const bootstrapAdjustments = async () => {
+  const bootstrapAdjustments = useCallback(async () => {
     setIsBootstrapping(true)
     setLoadError('')
 
@@ -105,7 +95,22 @@ function Operations({ activeTab = 'receipts' }) {
     } finally {
       setIsBootstrapping(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    receiptQueryAppliedRef.current = receiptQueryApplied
+  }, [receiptQueryApplied])
+
+  useEffect(() => {
+    setFeedback({ type: '', message: '' })
+
+    if (activeTab === 'adjustments') {
+      bootstrapAdjustments()
+      return
+    }
+
+    bootstrapOrders(receiptQueryAppliedRef.current)
+  }, [activeTab, bootstrapAdjustments, bootstrapOrders])
 
   const refreshData = async () => {
     setRefreshing(true)

@@ -39,22 +39,26 @@ const NAV_ITEMS = [
 function BottomNav() {
   return (
     <nav className="bottom-nav" aria-label="Console navigation">
-      {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
-        <NavLink
-          key={to}
-          to={to}
-          end={to !== '/operations'}
-          className={({ isActive }) =>
-            `bottom-nav-item${isActive ? ' is-active' : ''}`
-          }
-          aria-label={label}
-        >
-          <span className="bottom-nav-icon" aria-hidden="true">
-            <Icon size={22} />
-          </span>
-          <span className="bottom-nav-label">{label}</span>
-        </NavLink>
-      ))}
+      {NAV_ITEMS.map((item) => {
+        const ItemIcon = item.icon
+
+        return (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.to !== '/operations'}
+            className={({ isActive }) =>
+              `bottom-nav-item${isActive ? ' is-active' : ''}`
+            }
+            aria-label={item.label}
+          >
+            <span className="bottom-nav-icon" aria-hidden="true">
+              <ItemIcon size={22} />
+            </span>
+            <span className="bottom-nav-label">{item.label}</span>
+          </NavLink>
+        )
+      })}
     </nav>
   )
 }

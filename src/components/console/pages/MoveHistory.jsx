@@ -196,7 +196,7 @@ function MoveHistory() {
                     <td>On Hand {entry.current_on_hand_quantity} | Free {entry.current_free_to_use_quantity}</td>
                     <td>
                       <span className="movehistory-status">
-                        {entry.previous_status || '--'} → {entry.current_status || '--'}
+                        {entry.previous_status || '--'} {' -> '} {entry.current_status || '--'}
                       </span>
                     </td>
                     <td>On {withSign(entry.on_hand_delta)} | Free {withSign(entry.free_to_use_delta)}</td>
