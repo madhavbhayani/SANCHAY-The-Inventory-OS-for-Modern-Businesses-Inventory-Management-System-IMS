@@ -109,7 +109,7 @@ function OperationCreateOrder({ mode = 'receipt' }) {
           : 'Warehouse Location',
       to: isReceipt ? receiptDestination : form.toVendor.trim(),
       location_id: form.locationId,
-      contact_number: isReceipt ? `+91${form.contactNumber}` : '',
+      contact_number: `+91${sanitizePhoneDigits(form.contactNumber)}`,
       schedule_date: form.scheduleDate,
       status: form.status,
       items: normalizeItems(form.items),
@@ -211,22 +211,7 @@ function OperationCreateOrder({ mode = 'receipt' }) {
             </select>
           </div>
 
-          {isReceipt ? (
-            <div className="operations-field">
-              <label htmlFor="receipt-contact">Contact Number</label>
-              <div className="operations-phone-input">
-                <span>+91</span>
-                <input
-                  id="receipt-contact"
-                  inputMode="numeric"
-                  maxLength={10}
-                  value={form.contactNumber}
-                  onChange={(event) => setField('contactNumber', sanitizePhoneDigits(event.target.value))}
-                  placeholder="9876543210"
-                />
-              </div>
-            </div>
-          ) : (
+          {isReceipt ? null : (
             <div className="operations-field">
               <label htmlFor="delivery-to-vendor">To (Vendor Name)</label>
               <input
@@ -237,6 +222,21 @@ function OperationCreateOrder({ mode = 'receipt' }) {
               />
             </div>
           )}
+
+          <div className="operations-field">
+            <label htmlFor="create-contact-number">Contact Number</label>
+            <div className="operations-phone-input">
+              <span>+91</span>
+              <input
+                id="create-contact-number"
+                inputMode="numeric"
+                maxLength={10}
+                value={form.contactNumber}
+                onChange={(event) => setField('contactNumber', sanitizePhoneDigits(event.target.value))}
+                placeholder="9876543210"
+              />
+            </div>
+          </div>
 
           <div className="operations-field">
             <label htmlFor="create-schedule-date">Schedule Date</label>
@@ -343,9 +343,11 @@ function validateForm(form, isReceipt) {
   if (!form.locationId) return 'Location is required.'
   if (!form.scheduleDate) return 'Schedule date is required.'
   if (form.scheduleDate < todayDateISO()) return 'Schedule date must be today or future only.'
+  if (sanitizePhoneDigits(form.contactNumber).length !== 10) {
+    return 'Contact number must be exactly 10 digits.'
+  }
   if (isReceipt) {
     if (!form.fromVendor.trim()) return 'From (vendor name) is required.'
-    if (form.contactNumber.length !== 10) return 'Contact number must be exactly 10 digits.'
   } else if (!form.toVendor.trim()) {
     return 'To (vendor name) is required.'
   }
