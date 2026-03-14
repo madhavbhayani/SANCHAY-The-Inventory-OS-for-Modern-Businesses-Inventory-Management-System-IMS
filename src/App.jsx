@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import Login from './components/auth/Login'
 import Signup from './components/auth/Signup'
+import Dashboard from './components/dashboard/Dashboard'
 import Footer from './components/landing/Footer'
 import Hero from './components/landing/Hero'
 import Navbar from './components/landing/Navbar'
@@ -97,6 +98,7 @@ function App() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/dashboard" element={<Dashboard />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

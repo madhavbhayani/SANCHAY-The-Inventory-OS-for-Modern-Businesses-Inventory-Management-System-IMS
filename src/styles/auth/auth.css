@@ -221,6 +221,24 @@
   transform: scale(0.99);
 }
 
+.auth-submit-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ---- API-level error (form-wide) ---- */
+.auth-api-error {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: #fdf0ee;
+  border: 1px solid #f5c6c0;
+  font-size: 13px;
+  color: var(--color-error);
+  line-height: 1.45;
+}
+
 /* ---- Misc links ---- */
 .auth-forgot-link {
   display: block;

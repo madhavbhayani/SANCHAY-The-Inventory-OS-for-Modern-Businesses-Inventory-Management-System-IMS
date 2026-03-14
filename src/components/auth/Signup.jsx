@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import SanchayLogo from '../landing/SanchayLogo'
+import { apiSignup, saveSession } from '../../api/auth'
 import '../../styles/auth/auth.css'
 
 const PASSWORD_RULES = [
@@ -23,6 +24,9 @@ function Signup() {
   })
   const [errors, setErrors] = useState({})
   const [passwordFocused, setPasswordFocused] = useState(false)
+  const [apiError, setApiError] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const navigate = useNavigate()
 
   const handleChange = (e) => {
     const { name, value } = e.target
@@ -59,14 +63,28 @@ function Signup() {
     return newErrors
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     const newErrors = validate()
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors)
       return
     }
-    // TODO: connect to auth logic
+    setIsLoading(true)
+    setApiError('')
+    try {
+      const { token, user } = await apiSignup({
+        loginId: formData.loginId.trim(),
+        email: formData.email.trim(),
+        password: formData.password,
+      })
+      saveSession(token, user)
+      navigate('/dashboard', { replace: true })
+    } catch (err) {
+      setApiError(err.message)
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const showRules = passwordFocused || formData.password.length > 0
@@ -195,10 +213,12 @@ function Signup() {
               )}
             </div>
 
-            <button type="submit" className="auth-submit-btn">
-              Create Account
+            <button type="submit" className="auth-submit-btn" disabled={isLoading}>
+              {isLoading ? 'Creating account…' : 'Create Account'}
             </button>
           </form>
+
+          {apiError && <p className="auth-api-error">{apiError}</p>}
 
           <hr className="auth-divider" />
 
