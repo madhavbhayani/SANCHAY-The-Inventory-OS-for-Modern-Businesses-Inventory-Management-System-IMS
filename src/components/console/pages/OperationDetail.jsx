@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { jsPDF } from 'jspdf'
+import autoTable from 'jspdf-autotable'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   apiCancelOperationOrder,
@@ -7,6 +9,7 @@ import {
   apiUpdateOperationOrderDetail,
   apiValidateOperationOrder,
 } from '../../../api/auth'
+import sanchayLogo from '../../../assets/sanchay-logo.png'
 import '../../../styles/dashboard/operations.css'
 
 const RECEIPT_STATUS_OPTIONS = ['DRAFT', 'READY', 'DONE', 'CANCELLED']
@@ -59,7 +62,7 @@ function OperationDetail() {
   )
 
   const statusOptions = isReceipt ? RECEIPT_STATUS_OPTIONS : DELIVERY_STATUS_OPTIONS
-  const canPrint = ['READY', 'DONE'].includes(String(form.status || '').toUpperCase())
+  const canPrint = isReceipt && ['READY', 'DONE'].includes(String(form.status || '').toUpperCase())
 
   const itemsWithAvailability = useMemo(
     () =>
@@ -82,11 +85,7 @@ function OperationDetail() {
     [form.items, form.locationId, isReceipt, products],
   )
 
-  useEffect(() => {
-    loadPage()
-  }, [normalizedType, decodedReference])
-
-  const loadPage = async () => {
+  const loadPage = useCallback(async () => {
     setLoading(true)
     setLoadError('')
     setFeedback({ type: '', message: '' })
@@ -111,7 +110,11 @@ function OperationDetail() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [decodedReference, normalizedType])
+
+  useEffect(() => {
+    loadPage()
+  }, [loadPage])
 
   const setField = (name, value) => {
     setForm((previous) => ({ ...previous, [name]: value }))
@@ -237,30 +240,95 @@ function OperationDetail() {
     }
   }
 
-  const printOrder = () => {
+  const printOrder = async () => {
     if (!canPrint) {
-      setFeedback({ type: 'error', message: 'Print is available only when status is Ready or Done.' })
+      setFeedback({ type: 'error', message: 'PDF download is available only for Ready or Done receipt orders.' })
       return
     }
 
-    const printable = buildPrintableContent({
-      operationType: normalizedType,
-      referenceNumber: decodedReference,
-      form,
-      itemsWithAvailability,
-      productById,
-      locationById,
-    })
+    setFeedback({ type: '', message: '' })
 
-    const blob = new Blob([printable], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `operation-${normalizedType}-${sanitizeFileToken(decodedReference)}.txt`
-    anchor.click()
-    URL.revokeObjectURL(url)
+    try {
+      const locationEntry = locationById.get(form.locationId)
+      const locationLabel = locationEntry ? buildLocationLabel(locationEntry) : '--'
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
+      const pageWidth = pdf.internal.pageSize.getWidth()
+      const pageHeight = pdf.internal.pageSize.getHeight()
+      const margin = 40
 
-    setFeedback({ type: 'success', message: 'Printable file downloaded.' })
+      const logoData = await imageSourceToDataUrl(sanchayLogo)
+      if (logoData) {
+        pdf.addImage(logoData, 'PNG', margin, 32, 48, 48)
+      }
+
+      pdf.setTextColor(26, 58, 42)
+      pdf.setFont('helvetica', 'bold')
+      pdf.setFontSize(22)
+      pdf.text('Sanchay', margin + 60, 56)
+
+      pdf.setFont('helvetica', 'normal')
+      pdf.setFontSize(11)
+      pdf.setTextColor(82, 78, 70)
+      pdf.text('Inventory Management System', margin + 60, 72)
+
+      pdf.setDrawColor(26, 58, 42)
+      pdf.setLineWidth(1)
+      pdf.line(margin, 92, pageWidth - margin, 92)
+
+      autoTable(pdf, {
+        startY: 108,
+        theme: 'grid',
+        styles: {
+          fontSize: 9,
+          cellPadding: 6,
+          textColor: [38, 38, 38],
+          lineColor: [220, 214, 201],
+        },
+        body: [
+          ['Reference Number', decodedReference || '--', 'Document Type', 'Receipt Order'],
+          ['Status', toTitleCase(form.status), 'Operation', normalizedType],
+          ['Shipping Date', formatDate(form.scheduleDate), 'Contact', sanitizePhoneDigits(form.contactNumber) ? `+91${sanitizePhoneDigits(form.contactNumber)}` : '--'],
+          ['Shipping Location', locationLabel, 'Generated At', new Date().toLocaleString('en-IN')],
+          ['Vendor (From)', form.from || '--', 'Vendor (To)', form.to || '--'],
+        ],
+        columnStyles: {
+          0: { fontStyle: 'bold', fillColor: [247, 241, 231], cellWidth: 105 },
+          1: { cellWidth: 150 },
+          2: { fontStyle: 'bold', fillColor: [247, 241, 231], cellWidth: 95 },
+          3: { cellWidth: 150 },
+        },
+        margin: { left: margin, right: margin },
+      })
+
+      autoTable(pdf, {
+        startY: pdf.lastAutoTable.finalY + 14,
+        head: [['#', 'SKU', 'Product Name', 'Category', 'Ordered Qty', 'Available Qty', 'Status']],
+        body: buildPdfItemRows(itemsWithAvailability, productById),
+        theme: 'grid',
+        styles: {
+          fontSize: 8.4,
+          cellPadding: 6,
+          textColor: [40, 40, 40],
+          lineColor: [220, 214, 201],
+        },
+        headStyles: {
+          fillColor: [26, 58, 42],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+        },
+        margin: { left: margin, right: margin },
+      })
+
+      pdf.setFont('helvetica', 'italic')
+      pdf.setFontSize(9)
+      pdf.setTextColor(110, 106, 97)
+      pdf.text('Sanchay IMS Receipt Document', margin, pageHeight - 24)
+
+      pdf.save(`receipt-${sanitizeFileToken(decodedReference)}.pdf`)
+      setFeedback({ type: 'success', message: 'Receipt PDF downloaded.' })
+    } catch (error) {
+      setFeedback({ type: 'error', message: error?.message || 'Failed to generate receipt PDF.' })
+    }
   }
 
   const goBack = () => {
@@ -477,7 +545,7 @@ function OperationDetail() {
               {validating ? 'Validating...' : 'Validate'}
             </button>
             <button type="button" className="operations-btn secondary" onClick={printOrder} disabled={!canPrint}>
-              Print
+              Download PDF
             </button>
             <button
               type="button"
@@ -579,40 +647,41 @@ function getAvailableQuantityForItem(productId, locationId, products, fallbackAv
   return Number(fallbackAvailableQuantity || product.free_to_use_quantity || 0)
 }
 
-function buildPrintableContent({ operationType, referenceNumber, form, itemsWithAvailability, productById, locationById }) {
-  const location = locationById.get(form.locationId)
-  const locationLabel = location ? buildLocationLabel(location) : '--'
-
-  const lines = [
-    'Sanchay IMS - Operation Order',
-    '----------------------------------------',
-    `Reference Number: ${referenceNumber || '--'}`,
-    `Operation: ${operationType}`,
-    `Status: ${toTitleCase(form.status)}`,
-    `Shipping Date: ${formatDate(form.scheduleDate)}`,
-    `Shipping Location: ${locationLabel}`,
-    `Vendor (From): ${form.from || '--'}`,
-    `Vendor (To): ${form.to || '--'}`,
-    `Contact: ${sanitizePhoneDigits(form.contactNumber) ? `+91${sanitizePhoneDigits(form.contactNumber)}` : '--'}`,
-    '',
-    'Items',
-    '----------------------------------------',
-  ]
-
-  itemsWithAvailability.forEach((item, index) => {
+function buildPdfItemRows(itemsWithAvailability, productById) {
+  return itemsWithAvailability.map((item, index) => {
     const product = productById.get(item.productId)
-    const productLabel = product ? `${product.sku} - ${product.name}` : item.productId || '--'
-    lines.push(
-      `${index + 1}. ${productLabel}`,
-      `   Ordered Quantity: ${item.orderedQuantity}`,
-      `   Available Quantity: ${item.availableQuantity}`,
-      `   Status: ${item.isInsufficient ? 'Insufficient stock' : 'Available'}`,
-    )
+    return [
+      String(index + 1),
+      product?.sku || '--',
+      product?.name || item.productId || '--',
+      product?.category_name || '--',
+      String(item.orderedQuantity || 0),
+      String(item.availableQuantity || 0),
+      item.isInsufficient ? 'Insufficient' : 'Available',
+    ]
   })
+}
 
-  lines.push('', `Generated: ${new Date().toLocaleString('en-IN')}`)
+function imageSourceToDataUrl(source) {
+  return new Promise((resolve) => {
+    const image = new Image()
+    image.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = image.naturalWidth
+      canvas.height = image.naturalHeight
+      const context = canvas.getContext('2d')
 
-  return lines.join('\n')
+      if (!context) {
+        resolve('')
+        return
+      }
+
+      context.drawImage(image, 0, 0)
+      resolve(canvas.toDataURL('image/png'))
+    }
+    image.onerror = () => resolve('')
+    image.src = source
+  })
 }
 
 function buildLocationLabel(location) {

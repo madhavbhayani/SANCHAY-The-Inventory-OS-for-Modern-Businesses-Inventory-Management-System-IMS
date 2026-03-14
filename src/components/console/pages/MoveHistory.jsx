@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { apiListMoveHistory } from '../../../api/auth'
 import '../../../styles/dashboard/movehistory.css'
 
@@ -19,25 +19,23 @@ const STATUS_OPTIONS = [
   { value: 'CANCELLED', label: 'Cancelled' },
 ]
 
+const DEFAULT_FILTERS = {
+  eventType: '',
+  status: '',
+  query: '',
+  fromDate: '',
+  toDate: '',
+}
+
 function MoveHistory() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [entries, setEntries] = useState([])
 
-  const [filters, setFilters] = useState({
-    eventType: '',
-    status: '',
-    query: '',
-    fromDate: '',
-    toDate: '',
-  })
+  const [filters, setFilters] = useState(DEFAULT_FILTERS)
 
-  useEffect(() => {
-    loadEntries({ bootstrap: true })
-  }, [])
-
-  const loadEntries = async ({ bootstrap = false } = {}) => {
+  const loadEntries = useCallback(async ({ bootstrap = false, nextFilters = DEFAULT_FILTERS } = {}) => {
     if (bootstrap) {
       setLoading(true)
     } else {
@@ -48,11 +46,11 @@ function MoveHistory() {
     try {
       const response = await apiListMoveHistory({
         limit: 260,
-        eventType: filters.eventType,
-        status: filters.status,
-        query: filters.query,
-        fromDate: filters.fromDate,
-        toDate: filters.toDate,
+        eventType: nextFilters.eventType,
+        status: nextFilters.status,
+        query: nextFilters.query,
+        fromDate: nextFilters.fromDate,
+        toDate: nextFilters.toDate,
       })
       setEntries(response.entries || [])
     } catch (error) {
@@ -61,7 +59,11 @@ function MoveHistory() {
       setLoading(false)
       setRefreshing(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    loadEntries({ bootstrap: true, nextFilters: DEFAULT_FILTERS })
+  }, [loadEntries])
 
   const setFilter = (name, value) => {
     setFilters((previous) => ({ ...previous, [name]: value }))
@@ -69,14 +71,12 @@ function MoveHistory() {
 
   const applyFilters = async (event) => {
     event.preventDefault()
-    await loadEntries()
+    await loadEntries({ nextFilters: filters })
   }
 
   const resetFilters = async () => {
-    setFilters({ eventType: '', status: '', query: '', fromDate: '', toDate: '' })
-    setTimeout(() => {
-      loadEntries()
-    }, 0)
+    setFilters(DEFAULT_FILTERS)
+    await loadEntries({ nextFilters: DEFAULT_FILTERS })
   }
 
   if (loading) {
@@ -95,7 +95,12 @@ function MoveHistory() {
           <h1>Move History</h1>
           <p>Receipts, delivery, internal transfers, and quantity corrections with state transitions.</p>
         </div>
-        <button type="button" className="movehistory-btn secondary" onClick={() => loadEntries()} disabled={refreshing}>
+        <button
+          type="button"
+          className="movehistory-btn secondary"
+          onClick={() => loadEntries({ nextFilters: filters })}
+          disabled={refreshing}
+        >
           {refreshing ? 'Refreshing...' : 'Refresh'}
         </button>
       </header>

@@ -25,8 +25,8 @@ function Dashboard() {
     }
   }
 
-  const locationRows = overview?.stock_by_location || []
-  const categoryRows = overview?.free_to_use_by_category || []
+  const locationRows = useMemo(() => overview?.stock_by_location || [], [overview])
+  const categoryRows = useMemo(() => overview?.free_to_use_by_category || [], [overview])
 
   const maxLocationValue = useMemo(
     () => locationRows.reduce((max, row) => Math.max(max, Number(row.free_to_use_quantity || 0)), 0),

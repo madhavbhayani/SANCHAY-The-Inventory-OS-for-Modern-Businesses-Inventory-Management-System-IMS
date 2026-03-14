@@ -571,7 +571,7 @@ function Operations({ activeTab = 'receipts' }) {
                         <td>{formatHistoryLocation(entry.to_location_name, entry.to_location_short_code)}</td>
                         <td>{entry.quantity_changed}</td>
                         <td>
-                          {entry.previous_free_to_use_quantity} -> {entry.updated_free_to_use_quantity}
+                          {entry.previous_free_to_use_quantity} -{'>'} {entry.updated_free_to_use_quantity}
                         </td>
                         <td>{entry.reason}</td>
                       </tr>
