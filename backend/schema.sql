@@ -148,6 +148,42 @@ CREATE INDEX IF NOT EXISTS idx_stocks_products_category_id  ON "stocks".products
 CREATE INDEX IF NOT EXISTS idx_stocks_products_location_id  ON "stocks".products (location_id);
 CREATE INDEX IF NOT EXISTS idx_stocks_products_updated_at   ON "stocks".products (updated_at DESC);
 
+-- Supports many-to-many mapping between products and locations with per-location
+-- quantity tracking.
+CREATE TABLE IF NOT EXISTS "stocks".product_stock_levels (
+    product_id             UUID           NOT NULL REFERENCES "stocks".products(id) ON DELETE CASCADE,
+    location_id            UUID           NOT NULL REFERENCES "locations".locations(id) ON DELETE RESTRICT,
+    on_hand_quantity       INTEGER        NOT NULL CHECK (on_hand_quantity >= 0),
+    free_to_use_quantity   INTEGER        NOT NULL CHECK (free_to_use_quantity >= 0),
+    created_at             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    updated_at             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (product_id, location_id),
+    CHECK (free_to_use_quantity <= on_hand_quantity)
+);
+
+CREATE INDEX IF NOT EXISTS idx_product_stock_levels_product_id  ON "stocks".product_stock_levels (product_id);
+CREATE INDEX IF NOT EXISTS idx_product_stock_levels_location_id ON "stocks".product_stock_levels (location_id);
+CREATE INDEX IF NOT EXISTS idx_product_stock_levels_updated_at  ON "stocks".product_stock_levels (updated_at DESC);
+
+-- Backfill the new stock-level table from legacy single-location columns.
+INSERT INTO "stocks".product_stock_levels (
+    product_id,
+    location_id,
+    on_hand_quantity,
+    free_to_use_quantity
+)
+SELECT
+    p.id,
+    p.location_id,
+    p.on_hand_quantity,
+    p.free_to_use_quantity
+FROM "stocks".products p
+ON CONFLICT (product_id, location_id) DO UPDATE
+SET
+    on_hand_quantity = EXCLUDED.on_hand_quantity,
+    free_to_use_quantity = EXCLUDED.free_to_use_quantity,
+    updated_at = NOW();
+
 CREATE SEQUENCE IF NOT EXISTS "operations".reference_seq START WITH 1 INCREMENT BY 1;
 
 CREATE TABLE IF NOT EXISTS "operations".orders (
@@ -161,10 +197,45 @@ CREATE TABLE IF NOT EXISTS "operations".orders (
     warehouse_short_code  VARCHAR(30)    NOT NULL,
     contact_number        VARCHAR(32),
     scheduled_date        DATE           NOT NULL,
-    status                VARCHAR(20)    NOT NULL CHECK (status IN ('DRAFT', 'WAITING', 'READY', 'DONE')),
+    status                VARCHAR(20)    NOT NULL CHECK (status IN ('DRAFT', 'WAITING', 'READY', 'DONE', 'CANCELLED')),
     created_at            TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
     updated_at            TIMESTAMPTZ    NOT NULL DEFAULT NOW()
 );
+
+-- Ensure status check includes CANCELLED for already-created tables.
+DO $$
+DECLARE
+    status_constraint RECORD;
+BEGIN
+    FOR status_constraint IN
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'operations'
+          AND t.relname = 'orders'
+          AND c.contype = 'c'
+          AND pg_get_constraintdef(c.oid) ILIKE '%status%'
+    LOOP
+        EXECUTE format('ALTER TABLE "operations".orders DROP CONSTRAINT %I', status_constraint.conname);
+    END LOOP;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'operations'
+          AND t.relname = 'orders'
+          AND c.conname = 'operations_orders_status_check'
+    ) THEN
+        EXECUTE '
+            ALTER TABLE "operations".orders
+            ADD CONSTRAINT operations_orders_status_check
+            CHECK (status IN (''DRAFT'', ''WAITING'', ''READY'', ''DONE'', ''CANCELLED''))
+        ';
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_operations_orders_reference_number ON "operations".orders (reference_number);
 CREATE INDEX IF NOT EXISTS idx_operations_orders_operation_type   ON "operations".orders (operation_type);

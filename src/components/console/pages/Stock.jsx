@@ -9,14 +9,18 @@ import {
 } from '../../../api/auth'
 import '../../../styles/dashboard/stock.css'
 
+const EMPTY_STOCK_LEVEL = {
+  locationId: '',
+  onHandQuantity: '',
+  freeToUseQuantity: '',
+}
+
 const EMPTY_FORM = {
   name: '',
   cost: '',
-  onHandQuantity: '',
-  freeToUseQuantity: '',
   categoryId: '',
-  locationId: '',
   description: '',
+  stockLevels: [{ ...EMPTY_STOCK_LEVEL }],
 }
 
 const EMPTY_CATEGORY_FORM = {
@@ -105,7 +109,7 @@ function Stock() {
     setEditorOpen(true)
     setEditingProductId('')
     setEditingSku('Auto generated')
-    setFormState(EMPTY_FORM)
+    setFormState(cloneFormState(EMPTY_FORM))
     setFeedback({ type: '', message: '' })
   }
 
@@ -121,6 +125,21 @@ function Stock() {
   }
 
   const openEditEditor = (product) => {
+    const sourceLevels =
+      Array.isArray(product.stock_levels) && product.stock_levels.length > 0
+        ? product.stock_levels.map((level) => ({
+            locationId: level.location_id || '',
+            onHandQuantity: String(level.on_hand_quantity ?? ''),
+            freeToUseQuantity: String(level.free_to_use_quantity ?? ''),
+          }))
+        : [
+            {
+              locationId: product.location_id || '',
+              onHandQuantity: String(product.on_hand_quantity ?? ''),
+              freeToUseQuantity: String(product.free_to_use_quantity ?? ''),
+            },
+          ]
+
     setEditorMode('edit')
     setEditorOpen(true)
     setEditingProductId(product.id)
@@ -128,11 +147,9 @@ function Stock() {
     setFormState({
       name: product.name || '',
       cost: String(product.cost ?? ''),
-      onHandQuantity: String(product.on_hand_quantity ?? ''),
-      freeToUseQuantity: String(product.free_to_use_quantity ?? ''),
       categoryId: product.category_id || '',
-      locationId: product.location_id || '',
       description: product.description || '',
+      stockLevels: sourceLevels.length > 0 ? sourceLevels : [{ ...EMPTY_STOCK_LEVEL }],
     })
     setFeedback({ type: '', message: '' })
   }
@@ -142,12 +159,38 @@ function Stock() {
     setEditorMode('create')
     setEditingProductId('')
     setEditingSku('Auto generated')
-    setFormState(EMPTY_FORM)
+    setFormState(cloneFormState(EMPTY_FORM))
   }
 
   const handleFormChange = (event) => {
     const { name, value } = event.target
     setFormState((previous) => ({ ...previous, [name]: value }))
+  }
+
+  const updateStockLevel = (index, field, value) => {
+    setFormState((previous) => ({
+      ...previous,
+      stockLevels: previous.stockLevels.map((level, levelIndex) =>
+        levelIndex === index ? { ...level, [field]: value } : level,
+      ),
+    }))
+  }
+
+  const addStockLevelRow = () => {
+    setFormState((previous) => ({
+      ...previous,
+      stockLevels: [...previous.stockLevels, { ...EMPTY_STOCK_LEVEL }],
+    }))
+  }
+
+  const removeStockLevelRow = (index) => {
+    setFormState((previous) => {
+      if (previous.stockLevels.length === 1) return previous
+      return {
+        ...previous,
+        stockLevels: previous.stockLevels.filter((_, levelIndex) => levelIndex !== index),
+      }
+    })
   }
 
   const handleCategoryFormChange = (event) => {
@@ -288,7 +331,7 @@ function Stock() {
           <p className="stock-header-label">Inventory</p>
           <h1 className="stock-header-title">Stock In Hand</h1>
           <p className="stock-header-subtitle">
-            Create and manage products with live database search, update, and deletion support.
+            Create products once and assign quantity to multiple locations.
           </p>
         </div>
         <div className="stock-header-actions">
@@ -428,33 +471,7 @@ function Stock() {
               />
             </label>
 
-            <label>
-              On Hand Quantity
-              <input
-                name="onHandQuantity"
-                type="number"
-                min="0"
-                step="1"
-                value={formState.onHandQuantity}
-                onChange={handleFormChange}
-                placeholder="0"
-              />
-            </label>
-
-            <label>
-              Free To Use Quantity
-              <input
-                name="freeToUseQuantity"
-                type="number"
-                min="0"
-                step="1"
-                value={formState.freeToUseQuantity}
-                onChange={handleFormChange}
-                placeholder="0"
-              />
-            </label>
-
-            <label>
+            <label className="full-width">
               Product Category
               <select name="categoryId" value={formState.categoryId} onChange={handleFormChange}>
                 <option value="">Select category</option>
@@ -466,18 +483,63 @@ function Stock() {
               </select>
             </label>
 
-            <label>
-              Location
-              <select name="locationId" value={formState.locationId} onChange={handleFormChange}>
-                <option value="">Select location</option>
-                {locations.map((location) => (
-                  <option key={location.id} value={location.id}>
-                    {location.name} ({location.short_code})
-                    {location.warehouse_names?.length ? ` - ${location.warehouse_names.join(', ')}` : ''}
-                  </option>
+            <div className="full-width stock-levels-panel">
+              <div className="stock-levels-header">
+                <p>Stock Levels by Location</p>
+                <button type="button" className="stock-btn ghost small" onClick={addStockLevelRow}>
+                  Add Location Row
+                </button>
+              </div>
+
+              <div className="stock-level-list">
+                {formState.stockLevels.map((level, index) => (
+                  <div key={`stock-level-${index}`} className="stock-level-row">
+                    <select
+                      value={level.locationId}
+                      onChange={(event) => updateStockLevel(index, 'locationId', event.target.value)}
+                    >
+                      <option value="">Select location</option>
+                      {locations.map((location) => (
+                        <option key={location.id} value={location.id}>
+                          {location.name} ({location.short_code})
+                        </option>
+                      ))}
+                    </select>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={level.onHandQuantity}
+                      onChange={(event) =>
+                        updateStockLevel(index, 'onHandQuantity', sanitizeIntegerInput(event.target.value))
+                      }
+                      placeholder="On Hand"
+                    />
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={level.freeToUseQuantity}
+                      onChange={(event) =>
+                        updateStockLevel(index, 'freeToUseQuantity', sanitizeIntegerInput(event.target.value))
+                      }
+                      placeholder="Free To Use"
+                    />
+
+                    <button
+                      type="button"
+                      className="stock-btn small danger"
+                      onClick={() => removeStockLevelRow(index)}
+                      disabled={formState.stockLevels.length === 1}
+                    >
+                      Remove
+                    </button>
+                  </div>
                 ))}
-              </select>
-            </label>
+              </div>
+            </div>
 
             <label className="full-width">
               Product Description
@@ -529,7 +591,7 @@ function Stock() {
                   <th>On Hand</th>
                   <th>Free To Use</th>
                   <th>Category</th>
-                  <th>Location / Warehouses</th>
+                  <th>Stock by Location</th>
                   <th>Description</th>
                   <th>Actions</th>
                 </tr>
@@ -546,11 +608,33 @@ function Stock() {
                     <td>{product.free_to_use_quantity}</td>
                     <td>{product.category_name}</td>
                     <td>
-                      <div className="stock-location-cell">
-                        <strong>
-                          {product.location_name} ({product.location_short_code})
-                        </strong>
-                        <span>{(product.warehouse_names || []).join(', ') || '--'}</span>
+                      <div className="stock-location-list">
+                        {(product.stock_levels || []).length > 0 ? (
+                          (product.stock_levels || []).map((level) => (
+                            <div
+                              key={`${product.id}-${level.location_id}`}
+                              className="stock-location-list-item"
+                            >
+                              <strong>
+                                {level.location_name} ({level.location_short_code})
+                              </strong>
+                              <span>
+                                On Hand {level.on_hand_quantity} | Free {level.free_to_use_quantity}
+                              </span>
+                              <span>{(level.warehouse_names || []).join(', ') || '--'}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="stock-location-list-item">
+                            <strong>
+                              {product.location_name} ({product.location_short_code})
+                            </strong>
+                            <span>
+                              On Hand {product.on_hand_quantity} | Free {product.free_to_use_quantity}
+                            </span>
+                            <span>{(product.warehouse_names || []).join(', ') || '--'}</span>
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td>{product.description || '--'}</td>
@@ -583,49 +667,97 @@ function Stock() {
   )
 }
 
+function cloneFormState(form) {
+  return {
+    ...form,
+    stockLevels: (form.stockLevels || []).map((level) => ({ ...level })),
+  }
+}
+
 function toProductPayload(form) {
-  const name = form.name.trim()
-  const categoryId = form.categoryId.trim()
-  const locationId = form.locationId.trim()
-  const description = form.description.trim()
+  const name = String(form.name || '').trim()
+  const categoryId = String(form.categoryId || '').trim()
+  const description = String(form.description || '').trim()
 
-  const rawCost = String(form.cost).trim()
-  const rawOnHandQuantity = String(form.onHandQuantity).trim()
-  const rawFreeToUseQuantity = String(form.freeToUseQuantity).trim()
-
+  const rawCost = String(form.cost || '').trim()
   if (rawCost === '') return { error: 'Cost is required.' }
-  if (rawOnHandQuantity === '') return { error: 'On hand quantity is required.' }
-  if (rawFreeToUseQuantity === '') return { error: 'Free to use quantity is required.' }
 
   const cost = Number(rawCost)
-  const onHandQuantity = Number(rawOnHandQuantity)
-  const freeToUseQuantity = Number(rawFreeToUseQuantity)
-
   if (!name) return { error: 'Product name is required.' }
   if (Number.isNaN(cost) || cost < 0) return { error: 'Cost must be a valid non-negative number.' }
-  if (!Number.isInteger(onHandQuantity) || onHandQuantity < 0) {
-    return { error: 'On hand quantity must be a valid non-negative integer.' }
-  }
-  if (!Number.isInteger(freeToUseQuantity) || freeToUseQuantity < 0) {
-    return { error: 'Free to use quantity must be a valid non-negative integer.' }
-  }
-  if (freeToUseQuantity > onHandQuantity) {
-    return { error: 'Free to use quantity cannot exceed on hand quantity.' }
-  }
   if (!categoryId) return { error: 'Please select a product category.' }
-  if (!locationId) return { error: 'Please select a location.' }
+
+  const normalizedLevels = normalizeStockLevels(form.stockLevels || [])
+  if (normalizedLevels.error) {
+    return { error: normalizedLevels.error }
+  }
 
   return {
     value: {
       name,
       cost,
-      on_hand_quantity: onHandQuantity,
-      free_to_use_quantity: freeToUseQuantity,
       category_id: categoryId,
-      location_id: locationId,
       description,
+      stock_levels: normalizedLevels.value,
     },
   }
+}
+
+function normalizeStockLevels(stockLevels) {
+  if (!Array.isArray(stockLevels) || stockLevels.length === 0) {
+    return { error: 'Add at least one stock location row.' }
+  }
+
+  const seenLocations = new Set()
+  const levels = []
+
+  for (const level of stockLevels) {
+    const locationId = String(level.locationId || '').trim()
+    const rawOnHand = String(level.onHandQuantity || '').trim()
+    const rawFree = String(level.freeToUseQuantity || '').trim()
+
+    if (!locationId && !rawOnHand && !rawFree) {
+      continue
+    }
+
+    if (!locationId) return { error: 'Each stock row must include a location.' }
+    if (seenLocations.has(locationId)) {
+      return { error: 'Each location can only appear once in stock rows.' }
+    }
+
+    if (rawOnHand === '') return { error: 'On hand quantity is required in each stock row.' }
+    if (rawFree === '') return { error: 'Free to use quantity is required in each stock row.' }
+
+    const onHandQuantity = Number.parseInt(rawOnHand, 10)
+    const freeToUseQuantity = Number.parseInt(rawFree, 10)
+
+    if (!Number.isInteger(onHandQuantity) || onHandQuantity < 0) {
+      return { error: 'On hand quantity must be a valid non-negative integer.' }
+    }
+    if (!Number.isInteger(freeToUseQuantity) || freeToUseQuantity < 0) {
+      return { error: 'Free to use quantity must be a valid non-negative integer.' }
+    }
+    if (freeToUseQuantity > onHandQuantity) {
+      return { error: 'Free to use quantity cannot exceed on hand quantity.' }
+    }
+
+    seenLocations.add(locationId)
+    levels.push({
+      location_id: locationId,
+      on_hand_quantity: onHandQuantity,
+      free_to_use_quantity: freeToUseQuantity,
+    })
+  }
+
+  if (levels.length === 0) {
+    return { error: 'Add at least one valid location with stock quantity.' }
+  }
+
+  return { value: levels }
+}
+
+function sanitizeIntegerInput(value) {
+  return String(value || '').replace(/\D/g, '')
 }
 
 function formatCurrency(value) {

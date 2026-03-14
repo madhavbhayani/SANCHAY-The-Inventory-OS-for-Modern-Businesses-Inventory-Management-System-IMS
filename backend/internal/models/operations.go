@@ -10,12 +10,8 @@ type OperationLocationOption struct {
 	WarehouseNames []string `json:"warehouse_names"`
 }
 
-// OperationProductOption is a product selector option shown in operations forms.
-type OperationProductOption struct {
-	ID                string `json:"id"`
-	SKU               string `json:"sku"`
-	Name              string `json:"name"`
-	CategoryName      string `json:"category_name"`
+// OperationProductStockLevel captures where a product is available.
+type OperationProductStockLevel struct {
 	LocationID        string `json:"location_id"`
 	LocationName      string `json:"location_name"`
 	LocationShortCode string `json:"location_short_code"`
@@ -23,13 +19,28 @@ type OperationProductOption struct {
 	FreeToUseQuantity int    `json:"free_to_use_quantity"`
 }
 
+// OperationProductOption is a product selector option shown in operations forms.
+type OperationProductOption struct {
+	ID                string                       `json:"id"`
+	SKU               string                       `json:"sku"`
+	Name              string                       `json:"name"`
+	CategoryName      string                       `json:"category_name"`
+	LocationID        string                       `json:"location_id"`
+	LocationName      string                       `json:"location_name"`
+	LocationShortCode string                       `json:"location_short_code"`
+	OnHandQuantity    int                          `json:"on_hand_quantity"`
+	FreeToUseQuantity int                          `json:"free_to_use_quantity"`
+	StockLevels       []OperationProductStockLevel `json:"stock_levels"`
+}
+
 // OperationOrderItem is one product line attached to an operation order.
 type OperationOrderItem struct {
-	ID          string `json:"id"`
-	ProductID   string `json:"product_id"`
-	ProductSKU  string `json:"product_sku"`
-	ProductName string `json:"product_name"`
-	Quantity    int    `json:"quantity"`
+	ID                string `json:"id"`
+	ProductID         string `json:"product_id"`
+	ProductSKU        string `json:"product_sku"`
+	ProductName       string `json:"product_name"`
+	Quantity          int    `json:"quantity"`
+	AvailableQuantity int    `json:"available_quantity"`
 }
 
 // OperationOrder is either a receipt (IN) or delivery (OUT) order.

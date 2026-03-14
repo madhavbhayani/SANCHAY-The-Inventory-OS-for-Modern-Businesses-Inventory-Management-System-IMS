@@ -210,7 +210,7 @@ function Operations() {
                         </div>
                       </td>
                       <td>{order.from_party || '--'}</td>
-                      <td>{order.to_party || '--'}</td>
+                      <td>{displayToParty(order)}</td>
                       <td>{order.contact_number || '--'}</td>
                       <td>{formatDate(order.scheduled_date)}</td>
                       <td>
@@ -278,7 +278,7 @@ function Operations() {
                         <span className="operations-ref">{order.reference_number}</span>
                       </td>
                       <td>{order.from_party || '--'}</td>
-                      <td>{order.to_party || '--'}</td>
+                      <td>{displayToParty(order)}</td>
                       <td>{order.contact_number || '--'}</td>
                       <td>{formatDate(order.scheduled_date)}</td>
                       <td>
@@ -339,7 +339,20 @@ function statusClassName(statusValue) {
   if (status === 'WAITING') return 'is-waiting'
   if (status === 'READY') return 'is-ready'
   if (status === 'DONE') return 'is-done'
+  if (status === 'CANCELLED') return 'is-cancelled'
   return ''
+}
+
+function displayToParty(order) {
+  const to = String(order.to_party || '').trim()
+  if (to) return to
+  if (String(order.operation_type || '').toUpperCase() === 'IN') {
+    const locationName = String(order.location_name || '').trim()
+    const locationCode = String(order.location_short_code || '').trim()
+    if (locationName && locationCode) return `${locationName} (${locationCode})`
+    if (locationName) return locationName
+  }
+  return '--'
 }
 
 function buildOrderDetailPath(operationType, referenceNumber) {

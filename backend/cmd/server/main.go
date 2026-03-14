@@ -47,6 +47,10 @@ func main() {
 	mux.HandleFunc("POST /api/operations/receipts", operations.CreateReceipt)
 	mux.HandleFunc("GET /api/operations/delivery", operations.ListDelivery)
 	mux.HandleFunc("POST /api/operations/delivery", operations.CreateDelivery)
+	mux.HandleFunc("GET /api/operations/orders/{operationType}/{referenceNumber}", operations.GetOrderDetail)
+	mux.HandleFunc("PUT /api/operations/orders/{operationType}/{referenceNumber}", operations.UpdateOrderDetail)
+	mux.HandleFunc("POST /api/operations/orders/{operationType}/{referenceNumber}/validate", operations.ValidateOrder)
+	mux.HandleFunc("POST /api/operations/orders/{operationType}/{referenceNumber}/cancel", operations.CancelOrder)
 	mux.HandleFunc("DELETE /api/operations/orders/{id}", operations.DeleteOrder)
 
 	srv := &http.Server{
@@ -78,6 +82,10 @@ func main() {
 		log.Println("[SERVER]   POST /api/operations/receipts")
 		log.Println("[SERVER]   GET  /api/operations/delivery")
 		log.Println("[SERVER]   POST /api/operations/delivery")
+		log.Println("[SERVER]   GET  /api/operations/orders/{operationType}/{referenceNumber}")
+		log.Println("[SERVER]   PUT  /api/operations/orders/{operationType}/{referenceNumber}")
+		log.Println("[SERVER]   POST /api/operations/orders/{operationType}/{referenceNumber}/validate")
+		log.Println("[SERVER]   POST /api/operations/orders/{operationType}/{referenceNumber}/cancel")
 		log.Println("[SERVER]   DELETE /api/operations/orders/{id}")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[FATAL] ListenAndServe: %v", err)

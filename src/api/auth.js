@@ -191,6 +191,44 @@ export function apiDeleteOperationOrder(orderId) {
   })
 }
 
+/** Fetch operation detail by operation type and reference number. */
+export function apiGetOperationOrderDetail(operationType, referenceNumber) {
+  const safeType = String(operationType || '').toUpperCase() === 'OUT' ? 'OUT' : 'IN'
+  return request(`/operations/orders/${safeType}/${encodeURIComponent(referenceNumber || '')}`, {
+    auth: true,
+  })
+}
+
+/** Update operation detail by operation type and reference number. */
+export function apiUpdateOperationOrderDetail(operationType, referenceNumber, payload) {
+  const safeType = String(operationType || '').toUpperCase() === 'OUT' ? 'OUT' : 'IN'
+  return request(`/operations/orders/${safeType}/${encodeURIComponent(referenceNumber || '')}`, {
+    method: 'PUT',
+    auth: true,
+    body: payload,
+  })
+}
+
+/** Validate operation order lines against available stock. */
+export function apiValidateOperationOrder(operationType, referenceNumber) {
+  const safeType = String(operationType || '').toUpperCase() === 'OUT' ? 'OUT' : 'IN'
+  return request(`/operations/orders/${safeType}/${encodeURIComponent(referenceNumber || '')}/validate`, {
+    method: 'POST',
+    auth: true,
+    body: {},
+  })
+}
+
+/** Cancel operation order by operation type and reference number. */
+export function apiCancelOperationOrder(operationType, referenceNumber) {
+  const safeType = String(operationType || '').toUpperCase() === 'OUT' ? 'OUT' : 'IN'
+  return request(`/operations/orders/${safeType}/${encodeURIComponent(referenceNumber || '')}/cancel`, {
+    method: 'POST',
+    auth: true,
+    body: {},
+  })
+}
+
 /** Persist JWT + user info to localStorage after successful auth. */
 export function saveSession(token, user) {
   localStorage.setItem('sanchay_token', token)

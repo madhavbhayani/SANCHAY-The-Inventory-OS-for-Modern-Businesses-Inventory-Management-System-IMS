@@ -100,15 +100,16 @@ function OperationCreateOrder({ mode = 'receipt' }) {
     }
 
     const sourceLocation = locationById.get(form.locationId)
+    const receiptDestination = sourceLocation ? formatLocationLabel(sourceLocation) : ''
     const payload = {
       from: isReceipt
         ? form.fromVendor.trim()
         : sourceLocation
           ? `${sourceLocation.name} (${sourceLocation.short_code})`
           : 'Warehouse Location',
-      to: isReceipt ? '' : form.toVendor.trim(),
+      to: isReceipt ? receiptDestination : form.toVendor.trim(),
       location_id: form.locationId,
-      contact_number: isReceipt ? form.contactNumber.trim() : '',
+      contact_number: isReceipt ? `+91${form.contactNumber}` : '',
       schedule_date: form.scheduleDate,
       status: form.status,
       items: normalizeItems(form.items),
@@ -129,7 +130,7 @@ function OperationCreateOrder({ mode = 'receipt' }) {
     }
   }
 
-  const productsForLocation = getProductsForLocation(products, form.locationId)
+  const productsForLocation = isReceipt ? products : getProductsForLocation(products, form.locationId)
 
   if (loading) {
     return (
@@ -213,12 +214,17 @@ function OperationCreateOrder({ mode = 'receipt' }) {
           {isReceipt ? (
             <div className="operations-field">
               <label htmlFor="receipt-contact">Contact Number</label>
-              <input
-                id="receipt-contact"
-                value={form.contactNumber}
-                onChange={(event) => setField('contactNumber', event.target.value)}
-                placeholder="+91 98765 43210"
-              />
+              <div className="operations-phone-input">
+                <span>+91</span>
+                <input
+                  id="receipt-contact"
+                  inputMode="numeric"
+                  maxLength={10}
+                  value={form.contactNumber}
+                  onChange={(event) => setField('contactNumber', sanitizePhoneDigits(event.target.value))}
+                  placeholder="9876543210"
+                />
+              </div>
             </div>
           ) : (
             <div className="operations-field">
@@ -238,6 +244,7 @@ function OperationCreateOrder({ mode = 'receipt' }) {
               id="create-schedule-date"
               type="date"
               value={form.scheduleDate}
+              min={todayDateISO()}
               onChange={(event) => setField('scheduleDate', event.target.value)}
             />
           </div>
@@ -335,9 +342,10 @@ function normalizeItems(items) {
 function validateForm(form, isReceipt) {
   if (!form.locationId) return 'Location is required.'
   if (!form.scheduleDate) return 'Schedule date is required.'
+  if (form.scheduleDate < todayDateISO()) return 'Schedule date must be today or future only.'
   if (isReceipt) {
     if (!form.fromVendor.trim()) return 'From (vendor name) is required.'
-    if (!form.contactNumber.trim()) return 'Contact number is required.'
+    if (form.contactNumber.length !== 10) return 'Contact number must be exactly 10 digits.'
   } else if (!form.toVendor.trim()) {
     return 'To (vendor name) is required.'
   }
@@ -347,7 +355,13 @@ function validateForm(form, isReceipt) {
 
 function getProductsForLocation(products, locationId) {
   if (!locationId) return products
-  const scoped = products.filter((product) => product.location_id === locationId)
+  const scoped = products.filter((product) => {
+    const stockLevels = Array.isArray(product.stock_levels) ? product.stock_levels : []
+    if (stockLevels.some((level) => level.location_id === locationId)) {
+      return true
+    }
+    return product.location_id === locationId
+  })
   return scoped.length > 0 ? scoped : products
 }
 
@@ -373,7 +387,35 @@ function buildReferencePreview(locationId, locationById, operationType) {
 function productMetaById(productId, products) {
   const product = products.find((candidate) => candidate.id === productId)
   if (!product) return ''
-  return `${product.category_name} | ${product.location_name} (${product.location_short_code}) | Free ${product.free_to_use_quantity}`
+  const stockLevels = Array.isArray(product.stock_levels) ? product.stock_levels : []
+  const freeTotal =
+    stockLevels.length > 0
+      ? stockLevels.reduce((total, level) => total + Number(level.free_to_use_quantity || 0), 0)
+      : Number(product.free_to_use_quantity || 0)
+  if (stockLevels.length === 0) {
+    return `${product.category_name} | ${product.location_name} (${product.location_short_code}) | Free ${product.free_to_use_quantity}`
+  }
+
+  const locationPreview = stockLevels
+    .slice(0, 2)
+    .map((level) => `${level.location_name} (${level.location_short_code})`)
+    .join(', ')
+
+  return `${product.category_name} | ${stockLevels.length} locations | Free ${freeTotal}${locationPreview ? ` | ${locationPreview}` : ''}`
+}
+
+function sanitizePhoneDigits(value) {
+  return String(value || '')
+    .replace(/\D/g, '')
+    .slice(0, 10)
+}
+
+function todayDateISO() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function toTitleCase(value) {

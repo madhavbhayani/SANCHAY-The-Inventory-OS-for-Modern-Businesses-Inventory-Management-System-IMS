@@ -31,14 +31,21 @@ type stockProductsResponse struct {
 	Products []models.Product `json:"products"`
 }
 
+type stockLevelUpsertRequest struct {
+	LocationID        string `json:"location_id"`
+	OnHandQuantity    int    `json:"on_hand_quantity"`
+	FreeToUseQuantity int    `json:"free_to_use_quantity"`
+}
+
 type productUpsertRequest struct {
-	Name              string  `json:"name"`
-	Cost              float64 `json:"cost"`
-	OnHandQuantity    int     `json:"on_hand_quantity"`
-	FreeToUseQuantity int     `json:"free_to_use_quantity"`
-	CategoryID        string  `json:"category_id"`
-	LocationID        string  `json:"location_id"`
-	Description       string  `json:"description"`
+	Name              string                    `json:"name"`
+	Cost              float64                   `json:"cost"`
+	CategoryID        string                    `json:"category_id"`
+	Description       string                    `json:"description"`
+	StockLevels       []stockLevelUpsertRequest `json:"stock_levels"`
+	OnHandQuantity    int                       `json:"on_hand_quantity"`
+	FreeToUseQuantity int                       `json:"free_to_use_quantity"`
+	LocationID        string                    `json:"location_id"`
 }
 
 type createCategoryRequest struct {
@@ -228,13 +235,11 @@ func (h *StockHandler) DeleteProduct(w http.ResponseWriter, r *http.Request) {
 
 func validateProductPayload(req productUpsertRequest) (repository.ProductUpsertInput, error) {
 	payload := repository.ProductUpsertInput{
-		Name:              strings.TrimSpace(req.Name),
-		Cost:              req.Cost,
-		OnHandQuantity:    req.OnHandQuantity,
-		FreeToUseQuantity: req.FreeToUseQuantity,
-		CategoryID:        strings.TrimSpace(req.CategoryID),
-		LocationID:        strings.TrimSpace(req.LocationID),
-		Description:       strings.TrimSpace(req.Description),
+		Name:        strings.TrimSpace(req.Name),
+		Cost:        req.Cost,
+		CategoryID:  strings.TrimSpace(req.CategoryID),
+		Description: strings.TrimSpace(req.Description),
+		StockLevels: make([]repository.ProductStockLevelInput, 0),
 	}
 
 	if payload.Name == "" {
@@ -243,20 +248,46 @@ func validateProductPayload(req productUpsertRequest) (repository.ProductUpsertI
 	if payload.Cost < 0 {
 		return payload, errors.New("cost cannot be negative")
 	}
-	if payload.OnHandQuantity < 0 {
-		return payload, errors.New("on hand quantity cannot be negative")
-	}
-	if payload.FreeToUseQuantity < 0 {
-		return payload, errors.New("free to use quantity cannot be negative")
-	}
-	if payload.FreeToUseQuantity > payload.OnHandQuantity {
-		return payload, errors.New("free to use quantity cannot exceed on hand quantity")
-	}
 	if payload.CategoryID == "" {
 		return payload, errors.New("product category is required")
 	}
-	if payload.LocationID == "" {
-		return payload, errors.New("location is required")
+
+	if len(req.StockLevels) > 0 {
+		for _, level := range req.StockLevels {
+			payload.StockLevels = append(payload.StockLevels, repository.ProductStockLevelInput{
+				LocationID:        strings.TrimSpace(level.LocationID),
+				OnHandQuantity:    level.OnHandQuantity,
+				FreeToUseQuantity: level.FreeToUseQuantity,
+			})
+		}
+	} else {
+		legacyLocationID := strings.TrimSpace(req.LocationID)
+		if legacyLocationID != "" {
+			payload.StockLevels = append(payload.StockLevels, repository.ProductStockLevelInput{
+				LocationID:        legacyLocationID,
+				OnHandQuantity:    req.OnHandQuantity,
+				FreeToUseQuantity: req.FreeToUseQuantity,
+			})
+		}
+	}
+
+	if len(payload.StockLevels) == 0 {
+		return payload, errors.New("at least one stock location is required")
+	}
+
+	for _, level := range payload.StockLevels {
+		if level.LocationID == "" {
+			return payload, errors.New("location is required for each stock row")
+		}
+		if level.OnHandQuantity < 0 {
+			return payload, errors.New("on hand quantity cannot be negative")
+		}
+		if level.FreeToUseQuantity < 0 {
+			return payload, errors.New("free to use quantity cannot be negative")
+		}
+		if level.FreeToUseQuantity > level.OnHandQuantity {
+			return payload, errors.New("free to use quantity cannot exceed on hand quantity")
+		}
 	}
 
 	return payload, nil
@@ -269,6 +300,9 @@ func mapStockError(err error) (int, string) {
 	if errors.Is(err, repository.ErrCategoryNameTaken) {
 		return http.StatusConflict, "category name already exists"
 	}
+	if errors.Is(err, repository.ErrProductStockLevelsRequired) {
+		return http.StatusBadRequest, "at least one stock location is required"
+	}
 
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
@@ -278,7 +312,7 @@ func mapStockError(err error) (int, string) {
 		case "23514":
 			return http.StatusBadRequest, "invalid quantity or cost values"
 		case "23505":
-			return http.StatusConflict, "category name already exists"
+			return http.StatusConflict, "duplicate unique value in request"
 		}
 	}
 
