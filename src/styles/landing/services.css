@@ -1,0 +1,130 @@
+.services {
+  width: 100%;
+  background: var(--color-forest);
+  padding: var(--section-pad-block) var(--section-pad-inline);
+}
+
+.services-header {
+  text-align: center;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.services-header h2 {
+  margin-top: 14px;
+  font-size: var(--fs-h2);
+  color: #f5f0e8;
+}
+
+.role-grid {
+  margin-top: 60px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.role-card {
+  position: relative;
+  border-radius: var(--radius-2xl);
+  background: var(--color-offwhite);
+  padding: 40px;
+}
+
+.role-badge {
+  width: fit-content;
+  border-radius: var(--radius-pill);
+  padding: 4px 14px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.role-badge--manager {
+  background: #eaf3ec;
+  color: #1a5c33;
+}
+
+.role-badge--staff {
+  background: #fef3e8;
+  color: #8a3e0c;
+}
+
+.role-card h3 {
+  margin-top: 16px;
+  color: var(--color-forest);
+  font-size: 26px;
+  line-height: 1.15;
+}
+
+.role-card h3 span {
+  display: block;
+}
+
+.role-description {
+  margin-top: 10px;
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.role-feature-list {
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.role-feature-list li {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: start;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--color-charcoal);
+}
+
+.role-feature-list svg {
+  width: 18px;
+  height: 18px;
+}
+
+.services-cta-strip {
+  margin-top: 32px;
+  border-radius: var(--radius-xl);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 40px;
+  text-align: center;
+}
+
+.services-cta-strip h3 {
+  color: #f5f0e8;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.services-cta-strip p {
+  margin-top: 8px;
+  color: #7ba894;
+  font-size: 15px;
+}
+
+.services-cta-strip .hero-primary-btn {
+  margin-top: 24px;
+}
+
+@media (max-width: 1199px) {
+  .role-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .role-card {
+    padding: 28px 22px;
+  }
+
+  .services-cta-strip {
+    padding: 28px 20px;
+  }
+}
