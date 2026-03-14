@@ -106,7 +106,10 @@ function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
       <Route path="/dashboard" element={<ConsoleLayout><Dashboard /></ConsoleLayout>} />
-      <Route path="/operations" element={<ConsoleLayout><Operations /></ConsoleLayout>} />
+      <Route path="/operations" element={<Navigate to="/operations/receipts" replace />} />
+      <Route path="/operations/receipts" element={<ConsoleLayout><Operations activeTab="receipts" /></ConsoleLayout>} />
+      <Route path="/operations/delivery" element={<ConsoleLayout><Operations activeTab="delivery" /></ConsoleLayout>} />
+      <Route path="/operations/adjustments" element={<ConsoleLayout><Operations activeTab="adjustments" /></ConsoleLayout>} />
       <Route path="/operations/receipts/create" element={<ConsoleLayout showBottomNav={false}><OperationCreateOrder mode="receipt" /></ConsoleLayout>} />
       <Route path="/operations/delivery/create" element={<ConsoleLayout showBottomNav={false}><OperationCreateOrder mode="delivery" /></ConsoleLayout>} />
       <Route path="/operations/:operationType/:referenceNumber" element={<ConsoleLayout showBottomNav={false}><OperationDetail /></ConsoleLayout>} />

@@ -14,6 +14,7 @@ CREATE SCHEMA IF NOT EXISTS "users";
 CREATE SCHEMA IF NOT EXISTS "locations";
 CREATE SCHEMA IF NOT EXISTS "stocks";
 CREATE SCHEMA IF NOT EXISTS "operations";
+CREATE SCHEMA IF NOT EXISTS "adjustments";
 
 -- Let the postgres role use and create within this schema.
 GRANT USAGE  ON SCHEMA "users" TO postgres;
@@ -24,6 +25,8 @@ GRANT USAGE  ON SCHEMA "stocks" TO postgres;
 GRANT CREATE ON SCHEMA "stocks" TO postgres;
 GRANT USAGE  ON SCHEMA "operations" TO postgres;
 GRANT CREATE ON SCHEMA "operations" TO postgres;
+GRANT USAGE  ON SCHEMA "adjustments" TO postgres;
+GRANT CREATE ON SCHEMA "adjustments" TO postgres;
 
 -- ── Drop old public-schema tables if they were created before this migration ─
 DROP TABLE IF EXISTS public.login_history;
@@ -307,3 +310,26 @@ CREATE TABLE IF NOT EXISTS "operations".order_items (
 
 CREATE INDEX IF NOT EXISTS idx_operations_order_items_order_id   ON "operations".order_items (order_id);
 CREATE INDEX IF NOT EXISTS idx_operations_order_items_product_id ON "operations".order_items (product_id);
+
+CREATE TABLE IF NOT EXISTS "adjustments".internal_transfer_history (
+    id                             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    action_type                    VARCHAR(32)  NOT NULL CHECK (action_type IN ('TRANSFER', 'QUANTITY_ADJUSTMENT')),
+    product_id                     UUID         NOT NULL REFERENCES "stocks".products(id) ON DELETE RESTRICT,
+    from_location_id               UUID         REFERENCES "locations".locations(id) ON DELETE RESTRICT,
+    to_location_id                 UUID         REFERENCES "locations".locations(id) ON DELETE RESTRICT,
+    quantity_changed               INTEGER      NOT NULL,
+    previous_free_to_use_quantity  INTEGER      NOT NULL CHECK (previous_free_to_use_quantity >= 0),
+    updated_free_to_use_quantity   INTEGER      NOT NULL CHECK (updated_free_to_use_quantity >= 0),
+    reason                         TEXT         NOT NULL,
+    created_at                     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CHECK (LENGTH(BTRIM(reason)) > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_adjustments_internal_transfer_history_product_id
+    ON "adjustments".internal_transfer_history (product_id);
+CREATE INDEX IF NOT EXISTS idx_adjustments_internal_transfer_history_created_at
+    ON "adjustments".internal_transfer_history (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_adjustments_internal_transfer_history_from_location_id
+    ON "adjustments".internal_transfer_history (from_location_id);
+CREATE INDEX IF NOT EXISTS idx_adjustments_internal_transfer_history_to_location_id
+    ON "adjustments".internal_transfer_history (to_location_id);

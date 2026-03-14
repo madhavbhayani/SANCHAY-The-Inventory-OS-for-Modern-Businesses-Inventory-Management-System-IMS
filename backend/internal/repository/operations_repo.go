@@ -345,10 +345,8 @@ func (r *OperationsRepo) CreateOrder(input OperationCreateInput) (*models.Operat
 		}
 	}
 
-	if status == "DONE" {
-		if err := applyStockMovementTx(tx, opType, locationID, aggregatedItems); err != nil {
-			return nil, err
-		}
+	if err := applyStockEffectTx(tx, buildOrderStockEffect(opType, status, locationID, aggregatedItems)); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -474,22 +472,21 @@ func (r *OperationsRepo) UpdateOrderByReference(input OperationUpdateInput) (*mo
 	}
 	defer tx.Rollback()
 
-	const lookupOrder = `
-		SELECT id, status
-		FROM operations.orders
-		WHERE operation_type = $1 AND reference_number = $2
-		FOR UPDATE`
-
-	var (
-		orderID       int64
-		currentStatus string
-	)
-	if err := tx.QueryRow(lookupOrder, opType, ref).Scan(&orderID, &currentStatus); err != nil {
+	orderRecord, err := getOrderForUpdateTx(tx, opType, ref)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrOperationNotFound
 		}
 		return nil, err
 	}
+
+	currentItems, err := listOrderItemQuantitiesTx(tx, orderRecord.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	orderID := orderRecord.ID
+	currentStatus := orderRecord.Status
 
 	if isTerminalOperationStatus(currentStatus) {
 		return nil, ErrOperationFinalized
@@ -558,10 +555,10 @@ func (r *OperationsRepo) UpdateOrderByReference(input OperationUpdateInput) (*mo
 		}
 	}
 
-	if status == "DONE" {
-		if err := applyStockMovementTx(tx, opType, locationID, aggregatedItems); err != nil {
-			return nil, err
-		}
+	currentEffect := buildOrderStockEffect(opType, currentStatus, orderRecord.LocationID, currentItems)
+	newEffect := buildOrderStockEffect(opType, status, locationID, aggregatedItems)
+	if err := applyStockEffectTx(tx, diffStockEffects(currentEffect, newEffect)); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -618,14 +615,14 @@ func (r *OperationsRepo) UpdateOrderStatusByReference(operationType, referenceNu
 		}
 	}
 
-	if normalizedStatus == "DONE" {
-		items, err := listOrderItemQuantitiesTx(tx, orderRecord.ID)
-		if err != nil {
-			return nil, err
-		}
-		if err := applyStockMovementTx(tx, opType, orderRecord.LocationID, items); err != nil {
-			return nil, err
-		}
+	items, err := listOrderItemQuantitiesTx(tx, orderRecord.ID)
+	if err != nil {
+		return nil, err
+	}
+	currentEffect := buildOrderStockEffect(opType, currentStatus, orderRecord.LocationID, items)
+	newEffect := buildOrderStockEffect(opType, normalizedStatus, orderRecord.LocationID, items)
+	if err := applyStockEffectTx(tx, diffStockEffects(currentEffect, newEffect)); err != nil {
+		return nil, err
 	}
 
 	const q = `
@@ -905,104 +902,6 @@ func listOrderItemQuantitiesTx(tx *sql.Tx, orderID int64) (map[string]int, error
 	}
 
 	return items, nil
-}
-
-func applyStockMovementTx(tx *sql.Tx, operationType, locationID string, items map[string]int) error {
-	if len(items) == 0 {
-		return ErrOperationItemsRequired
-	}
-
-	normalizedLocationID := strings.TrimSpace(locationID)
-	for productID, quantity := range items {
-		if quantity <= 0 {
-			continue
-		}
-
-		delta := quantity
-		if operationType == "OUT" {
-			delta = -quantity
-		}
-
-		if err := applyProductQuantityDeltaTx(tx, strings.TrimSpace(productID), normalizedLocationID, delta); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func applyProductQuantityDeltaTx(tx *sql.Tx, productID, locationID string, delta int) error {
-	const selectQuery = `
-		SELECT COALESCE(stock_levels, '[]'::jsonb)
-		FROM stocks.products
-		WHERE id = $1
-		FOR UPDATE`
-
-	var rawStockLevels []byte
-	if err := tx.QueryRow(selectQuery, productID).Scan(&rawStockLevels); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrOperationProductInvalid
-		}
-		return err
-	}
-
-	levels, err := unmarshalProductStockLevels(rawStockLevels)
-	if err != nil {
-		return err
-	}
-
-	normalizedLocationID := strings.TrimSpace(locationID)
-	levelIndex := -1
-	for index := range levels {
-		if strings.TrimSpace(levels[index].LocationID) == normalizedLocationID {
-			levelIndex = index
-			break
-		}
-	}
-
-	if levelIndex == -1 {
-		if delta < 0 {
-			return ErrOperationStockInsufficient
-		}
-		levels = append(levels, models.ProductStockLevel{
-			LocationID:        normalizedLocationID,
-			OnHandQuantity:    delta,
-			FreeToUseQuantity: delta,
-		})
-	} else {
-		updatedOnHand := levels[levelIndex].OnHandQuantity + delta
-		updatedFreeToUse := levels[levelIndex].FreeToUseQuantity + delta
-		if updatedOnHand < 0 || updatedFreeToUse < 0 {
-			return ErrOperationStockInsufficient
-		}
-		levels[levelIndex].OnHandQuantity = updatedOnHand
-		levels[levelIndex].FreeToUseQuantity = updatedFreeToUse
-	}
-
-	updatedInputs := make([]ProductStockLevelInput, 0, len(levels))
-	for _, level := range levels {
-		updatedInputs = append(updatedInputs, ProductStockLevelInput{
-			LocationID:        strings.TrimSpace(level.LocationID),
-			OnHandQuantity:    level.OnHandQuantity,
-			FreeToUseQuantity: level.FreeToUseQuantity,
-		})
-	}
-
-	serializedLevels, err := marshalStockLevels(normalizeStockLevels(updatedInputs))
-	if err != nil {
-		return err
-	}
-
-	const updateQuery = `
-		UPDATE stocks.products
-		SET stock_levels = $2::jsonb, updated_at = NOW()
-		WHERE id = $1`
-
-	if _, err := tx.Exec(updateQuery, productID, serializedLevels); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func ensureOrdersStatusConstraintTx(tx *sql.Tx) error {

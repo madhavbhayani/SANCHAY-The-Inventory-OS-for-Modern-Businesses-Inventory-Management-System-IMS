@@ -285,9 +285,6 @@ func validateProductPayload(req productUpsertRequest) (repository.ProductUpsertI
 		if level.FreeToUseQuantity < 0 {
 			return payload, errors.New("free to use quantity cannot be negative")
 		}
-		if level.FreeToUseQuantity > level.OnHandQuantity {
-			return payload, errors.New("free to use quantity cannot exceed on hand quantity")
-		}
 	}
 
 	return payload, nil

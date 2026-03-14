@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   apiCreateDeliveryOrder,
   apiCreateReceiptOrder,
@@ -14,6 +14,11 @@ const EMPTY_ITEM = { productId: '', quantity: '1' }
 function OperationCreateOrder({ mode = 'receipt' }) {
   const isReceipt = mode === 'receipt'
   const navigate = useNavigate()
+  const location = useLocation()
+  const returnPath = resolveBackDestination(
+    location.state?.from,
+    isReceipt ? '/operations/receipts' : '/operations/delivery',
+  )
 
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -122,12 +127,16 @@ function OperationCreateOrder({ mode = 'receipt' }) {
       } else {
         await apiCreateDeliveryOrder(payload)
       }
-      navigate('/operations', { replace: true })
+      navigate(returnPath, { replace: true })
     } catch (error) {
       setFeedback({ type: 'error', message: error?.message || 'Failed to create order.' })
     } finally {
       setSaving(false)
     }
+  }
+
+  const goBack = () => {
+    navigate(returnPath)
   }
 
   const productsForLocation = isReceipt ? products : getProductsForLocation(products, form.locationId)
@@ -150,9 +159,9 @@ function OperationCreateOrder({ mode = 'receipt' }) {
             <button type="button" className="operations-btn primary" onClick={loadMeta}>
               Retry
             </button>
-            <Link to="/operations" className="operations-btn ghost">
+            <button type="button" className="operations-btn ghost" onClick={goBack}>
               Back
-            </Link>
+            </button>
           </div>
         </div>
       </section>
@@ -162,9 +171,9 @@ function OperationCreateOrder({ mode = 'receipt' }) {
   return (
     <section className="operation-detail-shell">
       <div className="operation-page-topbar">
-        <Link to="/operations" className="operations-btn secondary">
+        <button type="button" className="operations-btn secondary" onClick={goBack}>
           Back to Operations
-        </Link>
+        </button>
       </div>
 
       <article className="operations-card">
@@ -407,9 +416,19 @@ function productMetaById(productId, products) {
 }
 
 function sanitizePhoneDigits(value) {
-  return String(value || '')
-    .replace(/\D/g, '')
-    .slice(0, 10)
+  const digitsOnly = String(value || '').replace(/\D/g, '')
+  if (digitsOnly.startsWith('91') && digitsOnly.length > 10) {
+    return digitsOnly.slice(2, 12)
+  }
+  return digitsOnly.slice(0, 10)
+}
+
+function resolveBackDestination(from, fallbackPath) {
+  const normalized = String(from || '').trim()
+  if (normalized.startsWith('/operations/')) {
+    return normalized
+  }
+  return fallbackPath
 }
 
 function todayDateISO() {

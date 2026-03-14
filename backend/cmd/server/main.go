@@ -25,6 +25,7 @@ func main() {
 	settings := handlers.NewSettingsHandler(db)
 	stocks := handlers.NewStockHandler(db)
 	operations := handlers.NewOperationsHandler(db)
+	adjustments := handlers.NewAdjustmentsHandler(db)
 
 	// Go 1.22+ method-pattern routing: method + path pairs are matched exactly.
 	// net/http spawns a goroutine per request — all handlers run in parallel
@@ -47,6 +48,9 @@ func main() {
 	mux.HandleFunc("POST /api/operations/receipts", operations.CreateReceipt)
 	mux.HandleFunc("GET /api/operations/delivery", operations.ListDelivery)
 	mux.HandleFunc("POST /api/operations/delivery", operations.CreateDelivery)
+	mux.HandleFunc("GET /api/operations/adjustments", adjustments.GetOverview)
+	mux.HandleFunc("POST /api/operations/adjustments/transfer", adjustments.TransferStock)
+	mux.HandleFunc("POST /api/operations/adjustments/quantity", adjustments.AdjustQuantity)
 	mux.HandleFunc("GET /api/operations/orders/{operationType}/{referenceNumber}", operations.GetOrderDetail)
 	mux.HandleFunc("PUT /api/operations/orders/{operationType}/{referenceNumber}", operations.UpdateOrderDetail)
 	mux.HandleFunc("POST /api/operations/orders/{operationType}/{referenceNumber}/validate", operations.ValidateOrder)
@@ -82,6 +86,9 @@ func main() {
 		log.Println("[SERVER]   POST /api/operations/receipts")
 		log.Println("[SERVER]   GET  /api/operations/delivery")
 		log.Println("[SERVER]   POST /api/operations/delivery")
+		log.Println("[SERVER]   GET  /api/operations/adjustments")
+		log.Println("[SERVER]   POST /api/operations/adjustments/transfer")
+		log.Println("[SERVER]   POST /api/operations/adjustments/quantity")
 		log.Println("[SERVER]   GET  /api/operations/orders/{operationType}/{referenceNumber}")
 		log.Println("[SERVER]   PUT  /api/operations/orders/{operationType}/{referenceNumber}")
 		log.Println("[SERVER]   POST /api/operations/orders/{operationType}/{referenceNumber}/validate")

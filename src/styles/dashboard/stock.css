@@ -120,6 +120,58 @@
   line-height: 1;
 }
 
+.stock-label-with-info,
+.stock-th-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stock-th-with-help {
+  text-transform: inherit;
+  letter-spacing: inherit;
+}
+
+.stock-info-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(26, 58, 42, 0.22);
+  background: rgba(26, 58, 42, 0.07);
+  color: var(--color-forest);
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: help;
+}
+
+.stock-info-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%);
+  width: 220px;
+  border-radius: var(--radius-md);
+  background: #1f3428;
+  color: #fff;
+  padding: 8px 10px;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.16);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.stock-info-hint:hover .stock-info-tooltip,
+.stock-info-hint:focus-visible .stock-info-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-2px);
+}
+
 .stock-toolbar-card,
 .stock-category-card,
 .stock-editor-card,

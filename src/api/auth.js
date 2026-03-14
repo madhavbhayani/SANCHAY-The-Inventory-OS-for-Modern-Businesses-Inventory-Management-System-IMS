@@ -183,6 +183,31 @@ export function apiCreateDeliveryOrder(payload) {
   })
 }
 
+/** Fetch operations adjustments overview data. */
+export function apiGetAdjustmentsOverview({ limit = 320 } = {}) {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  return request(`/operations/adjustments?${params.toString()}`, { auth: true })
+}
+
+/** Move free-to-use stock between locations. */
+export function apiTransferAdjustmentStock(payload) {
+  return request('/operations/adjustments/transfer', {
+    method: 'POST',
+    auth: true,
+    body: payload,
+  })
+}
+
+/** Correct free-to-use stock quantity at a location. */
+export function apiAdjustStockQuantity(payload) {
+  return request('/operations/adjustments/quantity', {
+    method: 'POST',
+    auth: true,
+    body: payload,
+  })
+}
+
 /** Delete an operations order by id. */
 export function apiDeleteOperationOrder(orderId) {
   return request(`/operations/orders/${orderId}`, {

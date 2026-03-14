@@ -1,19 +1,23 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import {
+  apiAdjustStockQuantity,
+  apiGetAdjustmentsOverview,
   apiDeleteOperationOrder,
   apiListDeliveryOrders,
   apiListReceiptOrders,
+  apiTransferAdjustmentStock,
 } from '../../../api/auth'
 import '../../../styles/dashboard/operations.css'
 
 const OPERATIONS_TABS = [
-  { id: 'receipts', label: 'Receipts', subtitle: 'Incoming Goods' },
-  { id: 'delivery', label: 'Delivery', subtitle: 'Outgoing Goods' },
+  { id: 'receipts', label: 'Receipts', subtitle: 'Incoming Goods', path: '/operations/receipts' },
+  { id: 'delivery', label: 'Delivery', subtitle: 'Outgoing Goods', path: '/operations/delivery' },
+  { id: 'adjustments', label: 'Adjustments', subtitle: 'Internal Transfers', path: '/operations/adjustments' },
 ]
 
-function Operations() {
-  const [activeTab, setActiveTab] = useState('receipts')
+function Operations({ activeTab = 'receipts' }) {
+  const location = useLocation()
   const [isBootstrapping, setIsBootstrapping] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState('')
@@ -22,26 +26,27 @@ function Operations() {
   const [receipts, setReceipts] = useState([])
   const [deliveries, setDeliveries] = useState([])
   const [deletingOrderId, setDeletingOrderId] = useState('')
+  const [adjustmentsOverview, setAdjustmentsOverview] = useState({
+    locations: [],
+    rows: [],
+    history: [],
+  })
+  const [adjustmentDrafts, setAdjustmentDrafts] = useState({})
+  const [submittingAdjustmentKey, setSubmittingAdjustmentKey] = useState('')
+  const [submittingAdjustmentAction, setSubmittingAdjustmentAction] = useState('')
 
-  const allOrders = useMemo(() => {
-    const combined = [...receipts, ...deliveries]
-    return combined.sort((left, right) => {
-      const leftTs = Date.parse(left.created_at || left.updated_at || left.scheduled_date || '')
-      const rightTs = Date.parse(right.created_at || right.updated_at || right.scheduled_date || '')
-      if (!Number.isNaN(leftTs) && !Number.isNaN(rightTs)) {
-        return rightTs - leftTs
-      }
-      if (!Number.isNaN(leftTs)) return -1
-      if (!Number.isNaN(rightTs)) return 1
-      return String(right.reference_number || '').localeCompare(String(left.reference_number || ''))
-    })
-  }, [receipts, deliveries])
+  const currentPath = location.pathname
 
   useEffect(() => {
-    bootstrap()
-  }, [])
+    if (activeTab === 'adjustments') {
+      bootstrapAdjustments()
+      return
+    }
 
-  const bootstrap = async () => {
+    bootstrapOrders()
+  }, [activeTab])
+
+  const bootstrapOrders = async () => {
     setIsBootstrapping(true)
     setLoadError('')
 
@@ -60,20 +65,54 @@ function Operations() {
     }
   }
 
+  const bootstrapAdjustments = async () => {
+    setIsBootstrapping(true)
+    setLoadError('')
+
+    try {
+      const overview = await apiGetAdjustmentsOverview({ limit: 360 })
+      setAdjustmentsOverview({
+        locations: overview.locations || [],
+        rows: overview.rows || [],
+        history: overview.history || [],
+      })
+      setAdjustmentDrafts({})
+    } catch (error) {
+      setLoadError(error?.message || 'Failed to load adjustments data.')
+    } finally {
+      setIsBootstrapping(false)
+    }
+  }
+
   const refreshData = async () => {
     setRefreshing(true)
     setLoadError('')
 
     try {
-      const [receiptResponse, deliveryResponse] = await Promise.all([
-        apiListReceiptOrders({ limit: 180 }),
-        apiListDeliveryOrders({ limit: 180 }),
-      ])
+      if (activeTab === 'adjustments') {
+        const overview = await apiGetAdjustmentsOverview({ limit: 360 })
+        setAdjustmentsOverview({
+          locations: overview.locations || [],
+          rows: overview.rows || [],
+          history: overview.history || [],
+        })
+        setAdjustmentDrafts({})
+      } else {
+        const [receiptResponse, deliveryResponse] = await Promise.all([
+          apiListReceiptOrders({ limit: 180 }),
+          apiListDeliveryOrders({ limit: 180 }),
+        ])
 
-      setReceipts(receiptResponse.orders || [])
-      setDeliveries(deliveryResponse.orders || [])
+        setReceipts(receiptResponse.orders || [])
+        setDeliveries(deliveryResponse.orders || [])
+      }
     } catch (error) {
-      setLoadError(error?.message || 'Failed to refresh operations data.')
+      setLoadError(
+        error?.message ||
+          (activeTab === 'adjustments'
+            ? 'Failed to refresh adjustments data.'
+            : 'Failed to refresh operations data.'),
+      )
     } finally {
       setRefreshing(false)
     }
@@ -98,21 +137,142 @@ function Operations() {
     }
   }
 
+  const updateAdjustmentDraft = (row, field, value) => {
+    const rowKey = buildAdjustmentRowKey(row)
+    setAdjustmentDrafts((previous) => ({
+      ...previous,
+      [rowKey]: {
+        ...createAdjustmentDraft(row),
+        ...(previous[rowKey] || {}),
+        [field]: value,
+      },
+    }))
+  }
+
+  const submitTransfer = async (row) => {
+    const rowKey = buildAdjustmentRowKey(row)
+    const draft = {
+      ...createAdjustmentDraft(row),
+      ...(adjustmentDrafts[rowKey] || {}),
+    }
+
+    const quantity = Number.parseInt(String(draft.transferQuantity || '').trim(), 10)
+    if (!draft.transferLocationId) {
+      setFeedback({ type: 'error', message: 'Select a destination location for the transfer.' })
+      return
+    }
+    if (draft.transferLocationId === row.location_id) {
+      setFeedback({ type: 'error', message: 'Destination location must be different from the current location.' })
+      return
+    }
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      setFeedback({ type: 'error', message: 'Transfer quantity must be greater than zero.' })
+      return
+    }
+    if (quantity > Number(row.free_to_use_quantity || 0)) {
+      setFeedback({ type: 'error', message: 'Transfer quantity cannot exceed the current free-to-use quantity.' })
+      return
+    }
+    if (!String(draft.reason || '').trim()) {
+      setFeedback({ type: 'error', message: 'Reason is required for an internal transfer.' })
+      return
+    }
+
+    setFeedback({ type: '', message: '' })
+    setSubmittingAdjustmentKey(rowKey)
+    setSubmittingAdjustmentAction('transfer')
+
+    try {
+      await apiTransferAdjustmentStock({
+        product_id: row.product_id,
+        from_location_id: row.location_id,
+        to_location_id: draft.transferLocationId,
+        quantity,
+        reason: String(draft.reason || '').trim(),
+      })
+
+      await refreshData()
+      setFeedback({ type: 'success', message: 'Internal transfer saved successfully.' })
+    } catch (error) {
+      setFeedback({ type: 'error', message: error?.message || 'Failed to save the internal transfer.' })
+    } finally {
+      setSubmittingAdjustmentKey('')
+      setSubmittingAdjustmentAction('')
+    }
+  }
+
+  const submitQuantityCorrection = async (row) => {
+    const rowKey = buildAdjustmentRowKey(row)
+    const draft = {
+      ...createAdjustmentDraft(row),
+      ...(adjustmentDrafts[rowKey] || {}),
+    }
+
+    const correctedFreeToUse = Number.parseInt(String(draft.correctedFreeToUse || '').trim(), 10)
+    if (!Number.isInteger(correctedFreeToUse) || correctedFreeToUse < 0) {
+      setFeedback({ type: 'error', message: 'Corrected free-to-use quantity must be zero or more.' })
+      return
+    }
+    if (correctedFreeToUse === Number(row.free_to_use_quantity || 0)) {
+      setFeedback({ type: 'error', message: 'Enter a different free-to-use quantity to save a correction.' })
+      return
+    }
+    if (!String(draft.reason || '').trim()) {
+      setFeedback({ type: 'error', message: 'Reason is required for a stock correction.' })
+      return
+    }
+
+    setFeedback({ type: '', message: '' })
+    setSubmittingAdjustmentKey(rowKey)
+    setSubmittingAdjustmentAction('quantity')
+
+    try {
+      await apiAdjustStockQuantity({
+        product_id: row.product_id,
+        location_id: row.location_id,
+        free_to_use_quantity: correctedFreeToUse,
+        reason: String(draft.reason || '').trim(),
+      })
+
+      await refreshData()
+      setFeedback({ type: 'success', message: 'Free-to-use quantity corrected successfully.' })
+    } catch (error) {
+      setFeedback({ type: 'error', message: error?.message || 'Failed to update free-to-use quantity.' })
+    } finally {
+      setSubmittingAdjustmentKey('')
+      setSubmittingAdjustmentAction('')
+    }
+  }
+
+  const activeOrders = activeTab === 'receipts' ? receipts : deliveries
+  const activeEmptyMessage =
+    activeTab === 'receipts' ? 'No receipt orders created yet.' : 'No delivery orders created yet.'
+
   if (isBootstrapping) {
     return (
       <section className="operations-shell">
-        <div className="operations-status-card">Loading operations module...</div>
+        <div className="operations-status-card">
+          {activeTab === 'adjustments' ? 'Loading adjustments module...' : 'Loading operations module...'}
+        </div>
       </section>
     )
   }
 
-  if (loadError && receipts.length === 0 && deliveries.length === 0) {
+  if (
+    loadError &&
+    ((activeTab === 'adjustments' && adjustmentsOverview.rows.length === 0 && adjustmentsOverview.history.length === 0) ||
+      (activeTab !== 'adjustments' && receipts.length === 0 && deliveries.length === 0))
+  ) {
     return (
       <section className="operations-shell">
         <div className="operations-status-card">
-          <h1>Unable to load operations</h1>
+          <h1>Unable to load {activeTab === 'adjustments' ? 'adjustments' : 'operations'}</h1>
           <p>{loadError}</p>
-          <button type="button" className="operations-btn primary" onClick={bootstrap}>
+          <button
+            type="button"
+            className="operations-btn primary"
+            onClick={activeTab === 'adjustments' ? bootstrapAdjustments : bootstrapOrders}
+          >
             Retry
           </button>
         </div>
@@ -125,9 +285,9 @@ function Operations() {
       <header className="operations-header">
         <div>
           <p className="operations-header-label">Inventory Operations</p>
-          <h1 className="operations-header-title">Receipts and Delivery</h1>
+          <h1 className="operations-header-title">Receipts, Delivery, and Adjustments</h1>
           <p className="operations-header-subtitle">
-            Track incoming and outgoing orders with reference number, schedule, and status.
+            Track incoming orders, outbound deliveries, and internal stock corrections in one place.
           </p>
         </div>
         <button
@@ -142,17 +302,16 @@ function Operations() {
 
       <div className="operations-tab-row" role="tablist" aria-label="Operations tabs">
         {OPERATIONS_TABS.map((tab) => (
-          <button
+          <Link
             key={tab.id}
-            type="button"
             role="tab"
+            to={tab.path}
             aria-selected={activeTab === tab.id}
             className={`operations-tab${activeTab === tab.id ? ' is-active' : ''}`}
-            onClick={() => setActiveTab(tab.id)}
           >
             <span className="operations-tab-label">{tab.label}</span>
             <span className="operations-tab-subtitle">{tab.subtitle}</span>
-          </button>
+          </Link>
         ))}
       </div>
 
@@ -164,28 +323,211 @@ function Operations() {
 
       {loadError ? <p className="operations-feedback is-error">{loadError}</p> : null}
 
-      {activeTab === 'receipts' ? (
+      {activeTab === 'adjustments' ? (
         <article className="operations-card" role="tabpanel">
           <div className="operations-list-head">
             <div>
-              <h2>All Receipt and Delivery Orders</h2>
-              <p>
-                Initial view includes both receipt and delivery orders with reference, from, to, contact,
-                schedule date, and status.
-              </p>
-            </div>
-            <div className="operations-form-actions">
-              <Link to="/operations/receipts/create" className="operations-btn primary">
-                Create Receipt
-              </Link>
-              <Link to="/operations/delivery/create" className="operations-btn ghost">
-                Create Delivery
-              </Link>
+              <h2>Adjustments</h2>
+              <p>Move stock across locations and correct free-to-use mismatches with a reason trail.</p>
             </div>
           </div>
 
-          {allOrders.length === 0 ? (
-            <p className="operations-empty">No orders created yet.</p>
+          {adjustmentsOverview.rows.length === 0 ? (
+            <p className="operations-empty">No stock rows available for internal transfers yet.</p>
+          ) : (
+            <div className="operations-table-wrap">
+              <table className="operations-adjustments-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Category</th>
+                    <th>Location</th>
+                    <th>
+                      <span className="operations-th-with-help">
+                        On Hand
+                        <InfoHint text="On hand means quantity going to receive soon from receipt." />
+                      </span>
+                    </th>
+                    <th>
+                      <span className="operations-th-with-help">
+                        Free To Use
+                        <InfoHint text="Free to use means available in stock at warehouse." />
+                      </span>
+                    </th>
+                    <th>Move To</th>
+                    <th>Move Qty</th>
+                    <th>Correct Free Qty</th>
+                    <th>Reason</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adjustmentsOverview.rows.map((row) => {
+                    const rowKey = buildAdjustmentRowKey(row)
+                    const draft = {
+                      ...createAdjustmentDraft(row),
+                      ...(adjustmentDrafts[rowKey] || {}),
+                    }
+                    const isSubmitting = submittingAdjustmentKey === rowKey
+
+                    return (
+                      <tr key={rowKey}>
+                        <td>
+                          <div className="operations-products-cell">
+                            <strong>{row.sku}</strong>
+                            <span>{row.name}</span>
+                          </div>
+                        </td>
+                        <td>{row.category_name}</td>
+                        <td>
+                          <div className="operations-location-cell">
+                            <strong>
+                              {row.location_name} ({row.location_short_code})
+                            </strong>
+                            <span>{(row.warehouse_names || []).join(', ') || '--'}</span>
+                          </div>
+                        </td>
+                        <td>{row.on_hand_quantity}</td>
+                        <td>{row.free_to_use_quantity}</td>
+                        <td>
+                          <select
+                            value={draft.transferLocationId}
+                            onChange={(event) => updateAdjustmentDraft(row, 'transferLocationId', event.target.value)}
+                            disabled={isSubmitting}
+                          >
+                            <option value="">Select location</option>
+                            {adjustmentsOverview.locations
+                              .filter((entry) => entry.id !== row.location_id)
+                              .map((entry) => (
+                                <option key={entry.id} value={entry.id}>
+                                  {entry.name} ({entry.short_code})
+                                </option>
+                              ))}
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={draft.transferQuantity}
+                            onChange={(event) => updateAdjustmentDraft(row, 'transferQuantity', sanitizeWholeNumber(event.target.value))}
+                            disabled={isSubmitting}
+                            placeholder="0"
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={draft.correctedFreeToUse}
+                            onChange={(event) => updateAdjustmentDraft(row, 'correctedFreeToUse', sanitizeWholeNumber(event.target.value))}
+                            disabled={isSubmitting}
+                            placeholder="0"
+                          />
+                        </td>
+                        <td>
+                          <input
+                            value={draft.reason}
+                            onChange={(event) => updateAdjustmentDraft(row, 'reason', event.target.value)}
+                            disabled={isSubmitting}
+                            placeholder="Why is this changing?"
+                          />
+                        </td>
+                        <td>
+                          <div className="operations-row-actions">
+                            <button
+                              type="button"
+                              className="operations-btn small secondary"
+                              disabled={isSubmitting}
+                              onClick={() => submitTransfer(row)}
+                            >
+                              {isSubmitting && submittingAdjustmentAction === 'transfer' ? 'Moving...' : 'Move'}
+                            </button>
+                            <button
+                              type="button"
+                              className="operations-btn small primary"
+                              disabled={isSubmitting}
+                              onClick={() => submitQuantityCorrection(row)}
+                            >
+                              {isSubmitting && submittingAdjustmentAction === 'quantity' ? 'Saving...' : 'Correct Qty'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="operations-history-card">
+            <div className="operations-list-head">
+              <div>
+                <h2>Internal Transfer History</h2>
+                <p>Every internal move and free-to-use correction is logged with reason and timestamp.</p>
+              </div>
+            </div>
+
+            {adjustmentsOverview.history.length === 0 ? (
+              <p className="operations-empty">No adjustments recorded yet.</p>
+            ) : (
+              <div className="operations-table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Type</th>
+                      <th>Product</th>
+                      <th>From</th>
+                      <th>To</th>
+                      <th>Qty</th>
+                      <th>Free Qty</th>
+                      <th>Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adjustmentsOverview.history.map((entry) => (
+                      <tr key={entry.id}>
+                        <td>{formatDateTime(entry.created_at)}</td>
+                        <td>{formatActionType(entry.action_type)}</td>
+                        <td>
+                          <div className="operations-products-cell">
+                            <strong>{entry.sku}</strong>
+                            <span>{entry.name}</span>
+                          </div>
+                        </td>
+                        <td>{formatHistoryLocation(entry.from_location_name, entry.from_location_short_code)}</td>
+                        <td>{formatHistoryLocation(entry.to_location_name, entry.to_location_short_code)}</td>
+                        <td>{entry.quantity_changed}</td>
+                        <td>
+                          {entry.previous_free_to_use_quantity} → {entry.updated_free_to_use_quantity}
+                        </td>
+                        <td>{entry.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </article>
+      ) : activeTab === 'receipts' ? (
+        <article className="operations-card" role="tabpanel">
+          <div className="operations-list-head">
+            <div>
+              <h2>Receipt Orders</h2>
+              <p>Incoming goods planned for warehouse receipt.</p>
+            </div>
+            <Link to="/operations/receipts/create" state={{ from: currentPath }} className="operations-btn primary">
+              Create Receipt
+            </Link>
+          </div>
+
+          {receipts.length === 0 ? (
+            <p className="operations-empty">No receipt orders created yet.</p>
           ) : (
             <div className="operations-table-wrap">
               <table>
@@ -201,12 +543,12 @@ function Operations() {
                   </tr>
                 </thead>
                 <tbody>
-                  {allOrders.map((order) => (
-                    <tr key={`${order.operation_type}-${order.id}`}>
+                  {receipts.map((order) => (
+                    <tr key={order.id}>
                       <td>
                         <div className="operations-ref-cell">
                           <span className="operations-ref">{order.reference_number}</span>
-                          <small>{order.operation_type === 'OUT' ? 'Delivery' : 'Receipt'}</small>
+                          <small>Receipt</small>
                         </div>
                       </td>
                       <td>{order.from_party || '--'}</td>
@@ -222,6 +564,7 @@ function Operations() {
                         <div className="operations-row-actions">
                           <Link
                             to={buildOrderDetailPath(order.operation_type, order.reference_number)}
+                            state={{ from: currentPath }}
                             className="operations-btn small secondary"
                           >
                             View
@@ -250,13 +593,13 @@ function Operations() {
               <h2>Delivery Orders</h2>
               <p>Outgoing goods and shipment intent.</p>
             </div>
-            <Link to="/operations/delivery/create" className="operations-btn primary">
+            <Link to="/operations/delivery/create" state={{ from: currentPath }} className="operations-btn primary">
               Create Delivery
             </Link>
           </div>
 
-          {deliveries.length === 0 ? (
-            <p className="operations-empty">No delivery orders created yet.</p>
+          {activeOrders.length === 0 ? (
+            <p className="operations-empty">{activeEmptyMessage}</p>
           ) : (
             <div className="operations-table-wrap">
               <table>
@@ -272,7 +615,7 @@ function Operations() {
                   </tr>
                 </thead>
                 <tbody>
-                  {deliveries.map((order) => (
+                  {activeOrders.map((order) => (
                     <tr key={order.id}>
                       <td>
                         <span className="operations-ref">{order.reference_number}</span>
@@ -290,6 +633,7 @@ function Operations() {
                         <div className="operations-row-actions">
                           <Link
                             to={buildOrderDetailPath(order.operation_type, order.reference_number)}
+                            state={{ from: currentPath }}
                             className="operations-btn small secondary"
                           >
                             View
@@ -316,6 +660,19 @@ function Operations() {
   )
 }
 
+function createAdjustmentDraft(row) {
+  return {
+    transferLocationId: '',
+    transferQuantity: '',
+    correctedFreeToUse: String(row.free_to_use_quantity ?? 0),
+    reason: '',
+  }
+}
+
+function buildAdjustmentRowKey(row) {
+  return `${row.product_id}:${row.location_id}`
+}
+
 function formatDate(value) {
   if (!value) return '--'
   const date = new Date(value)
@@ -324,6 +681,19 @@ function formatDate(value) {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
+  })
+}
+
+function formatDateTime(value) {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '--'
+  return date.toLocaleString('en-IN', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   })
 }
 
@@ -358,6 +728,32 @@ function displayToParty(order) {
 function buildOrderDetailPath(operationType, referenceNumber) {
   const type = String(operationType || '').toUpperCase() === 'OUT' ? 'OUT' : 'IN'
   return `/operations/${type}/${encodeURIComponent(referenceNumber || '')}`
+}
+
+function sanitizeWholeNumber(value) {
+  return String(value || '').replace(/\D/g, '')
+}
+
+function formatActionType(value) {
+  const normalized = String(value || '').trim().toUpperCase()
+  if (normalized === 'QUANTITY_ADJUSTMENT') return 'Qty Correction'
+  if (normalized === 'TRANSFER') return 'Transfer'
+  return toTitleCase(normalized.replace(/_/g, ' '))
+}
+
+function formatHistoryLocation(name, shortCode) {
+  if (!name && !shortCode) return '--'
+  if (name && shortCode) return `${name} (${shortCode})`
+  return name || shortCode
+}
+
+function InfoHint({ text }) {
+  return (
+    <span className="operations-info-hint" tabIndex={0} aria-label={text}>
+      i
+      <span className="operations-info-tooltip">{text}</span>
+    </span>
+  )
 }
 
 export default Operations

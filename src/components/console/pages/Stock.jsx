@@ -353,11 +353,17 @@ function Stock() {
           <strong>{summary.productCount}</strong>
         </article>
         <article className="stock-metric-card">
-          <span>Total On Hand</span>
+          <div className="stock-label-with-info">
+            <span>Total On Hand</span>
+            <InfoHint text="On hand means quantity going to receive soon from receipt." />
+          </div>
           <strong>{summary.totalOnHand}</strong>
         </article>
         <article className="stock-metric-card">
-          <span>Total Free To Use</span>
+          <div className="stock-label-with-info">
+            <span>Total Free To Use</span>
+            <InfoHint text="Free to use means available in stock at warehouse." />
+          </div>
           <strong>{summary.totalFreeToUse}</strong>
         </article>
       </section>
@@ -588,8 +594,18 @@ function Stock() {
                   <th>Product ID</th>
                   <th>Name</th>
                   <th>Cost</th>
-                  <th>On Hand</th>
-                  <th>Free To Use</th>
+                  <th>
+                    <span className="stock-th-with-help">
+                      On Hand
+                      <InfoHint text="On hand means quantity going to receive soon from receipt." />
+                    </span>
+                  </th>
+                  <th>
+                    <span className="stock-th-with-help">
+                      Free To Use
+                      <InfoHint text="Free to use means available in stock at warehouse." />
+                    </span>
+                  </th>
                   <th>Category</th>
                   <th>Stock by Location</th>
                   <th>Description</th>
@@ -737,10 +753,6 @@ function normalizeStockLevels(stockLevels) {
     if (!Number.isInteger(freeToUseQuantity) || freeToUseQuantity < 0) {
       return { error: 'Free to use quantity must be a valid non-negative integer.' }
     }
-    if (freeToUseQuantity > onHandQuantity) {
-      return { error: 'Free to use quantity cannot exceed on hand quantity.' }
-    }
-
     seenLocations.add(locationId)
     levels.push({
       location_id: locationId,
@@ -768,6 +780,15 @@ function formatCurrency(value) {
     currency: 'INR',
     maximumFractionDigits: 2,
   }).format(number)
+}
+
+function InfoHint({ text }) {
+  return (
+    <span className="stock-info-hint" tabIndex={0} aria-label={text}>
+      i
+      <span className="stock-info-tooltip">{text}</span>
+    </span>
+  )
 }
 
 export default Stock

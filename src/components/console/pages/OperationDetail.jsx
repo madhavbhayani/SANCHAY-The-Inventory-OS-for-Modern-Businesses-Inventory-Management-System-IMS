@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   apiCancelOperationOrder,
   apiGetOperationOrderDetail,
@@ -14,6 +14,8 @@ const DELIVERY_STATUS_OPTIONS = ['DRAFT', 'WAITING', 'READY', 'DONE', 'CANCELLED
 
 function OperationDetail() {
   const { operationType = 'IN', referenceNumber = '' } = useParams()
+  const navigate = useNavigate()
+  const location = useLocation()
 
   const normalizedType = String(operationType).toUpperCase() === 'OUT' ? 'OUT' : 'IN'
   const decodedReference = safeDecode(referenceNumber)
@@ -41,6 +43,10 @@ function OperationDetail() {
   })
 
   const isReceipt = normalizedType === 'IN'
+  const returnPath = resolveBackDestination(
+    location.state?.from,
+    isReceipt ? '/operations/receipts' : '/operations/delivery',
+  )
 
   const locationById = useMemo(
     () => new Map(locations.map((location) => [location.id, location])),
@@ -257,6 +263,10 @@ function OperationDetail() {
     setFeedback({ type: 'success', message: 'Printable file downloaded.' })
   }
 
+  const goBack = () => {
+    navigate(returnPath)
+  }
+
   if (loading) {
     return (
       <section className="operation-detail-shell">
@@ -275,9 +285,9 @@ function OperationDetail() {
             <button type="button" className="operations-btn primary" onClick={loadPage}>
               Retry
             </button>
-            <Link to="/operations" className="operations-btn ghost">
+            <button type="button" className="operations-btn ghost" onClick={goBack}>
               Back to Operations
-            </Link>
+            </button>
           </div>
         </div>
       </section>
@@ -287,9 +297,9 @@ function OperationDetail() {
   return (
     <section className="operation-detail-shell">
       <div className="operation-page-topbar">
-        <Link to="/operations" className="operations-btn secondary">
+        <button type="button" className="operations-btn secondary" onClick={goBack}>
           Back to Operations
-        </Link>
+        </button>
       </div>
 
       <article className="operation-detail-card">
@@ -682,6 +692,14 @@ function safeDecode(value) {
   } catch {
     return value
   }
+}
+
+function resolveBackDestination(from, fallbackPath) {
+  const normalized = String(from || '').trim()
+  if (normalized.startsWith('/operations/')) {
+    return normalized
+  }
+  return fallbackPath
 }
 
 export default OperationDetail
