@@ -91,10 +91,7 @@ function OperationDetail() {
     setFeedback({ type: '', message: '' })
 
     try {
-      const [detailResponse, metaResponse] = await Promise.all([
-        apiGetOperationOrderDetail(normalizedType, decodedReference),
-        apiGetOperationsMeta(),
-      ])
+      const detailResponse = await apiGetOperationOrderDetail(normalizedType, decodedReference)
 
       const receivedOrder = detailResponse?.order
       if (!receivedOrder) {
@@ -102,9 +99,22 @@ function OperationDetail() {
       }
 
       setOrder(receivedOrder)
-      setProducts(metaResponse?.products || [])
-      setLocations(metaResponse?.locations || [])
       setForm(toEditableForm(receivedOrder))
+
+      try {
+        const metaResponse = await apiGetOperationsMeta()
+        setProducts(metaResponse?.products || [])
+        setLocations(metaResponse?.locations || [])
+      } catch {
+        // Keep detail page usable even if auxiliary meta request fails.
+        setProducts([])
+        setLocations([])
+        setFeedback({
+          type: 'error',
+          message:
+            'Order loaded, but product/location options failed to refresh. Try reopening after backend is available.',
+        })
+      }
     } catch (error) {
       setLoadError(error?.message || 'Failed to load operation detail.')
     } finally {

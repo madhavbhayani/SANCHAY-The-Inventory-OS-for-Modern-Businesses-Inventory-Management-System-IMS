@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	"madhavbhayani/SANCHAY-The-Inventory-OS-for-Modern-Businesses-Inventory-Management-System-IMS/internal/models"
@@ -401,20 +402,67 @@ func unmarshalProductStockLevels(rawStockLevels []byte) ([]models.ProductStockLe
 	}
 
 	storedLevels := make([]storedProductStockLevel, 0)
-	if err := json.Unmarshal(rawStockLevels, &storedLevels); err != nil {
-		return nil, err
+	if err := json.Unmarshal(rawStockLevels, &storedLevels); err == nil {
+		levels := make([]models.ProductStockLevel, 0, len(storedLevels))
+		for _, storedLevel := range storedLevels {
+			levels = append(levels, models.ProductStockLevel{
+				LocationID:        strings.TrimSpace(storedLevel.LocationID),
+				OnHandQuantity:    storedLevel.OnHandQuantity,
+				FreeToUseQuantity: storedLevel.FreeToUseQuantity,
+			})
+		}
+
+		return levels, nil
 	}
 
-	levels := make([]models.ProductStockLevel, 0, len(storedLevels))
-	for _, storedLevel := range storedLevels {
-		levels = append(levels, models.ProductStockLevel{
-			LocationID:        strings.TrimSpace(storedLevel.LocationID),
-			OnHandQuantity:    storedLevel.OnHandQuantity,
-			FreeToUseQuantity: storedLevel.FreeToUseQuantity,
-		})
+	legacyStructured := make(map[string]storedProductStockLevel)
+	if err := json.Unmarshal(rawStockLevels, &legacyStructured); err == nil {
+		keys := make([]string, 0, len(legacyStructured))
+		for locationID := range legacyStructured {
+			keys = append(keys, locationID)
+		}
+		sort.Strings(keys)
+
+		levels := make([]models.ProductStockLevel, 0, len(keys))
+		for _, locationID := range keys {
+			storedLevel := legacyStructured[locationID]
+			normalizedLocationID := strings.TrimSpace(storedLevel.LocationID)
+			if normalizedLocationID == "" {
+				normalizedLocationID = strings.TrimSpace(locationID)
+			}
+
+			levels = append(levels, models.ProductStockLevel{
+				LocationID:        normalizedLocationID,
+				OnHandQuantity:    storedLevel.OnHandQuantity,
+				FreeToUseQuantity: storedLevel.FreeToUseQuantity,
+			})
+		}
+
+		return levels, nil
 	}
 
-	return levels, nil
+	legacyFreeOnly := make(map[string]int)
+	if err := json.Unmarshal(rawStockLevels, &legacyFreeOnly); err == nil {
+		keys := make([]string, 0, len(legacyFreeOnly))
+		for locationID := range legacyFreeOnly {
+			keys = append(keys, locationID)
+		}
+		sort.Strings(keys)
+
+		levels := make([]models.ProductStockLevel, 0, len(keys))
+		for _, locationID := range keys {
+			levels = append(levels, models.ProductStockLevel{
+				LocationID:        strings.TrimSpace(locationID),
+				OnHandQuantity:    0,
+				FreeToUseQuantity: legacyFreeOnly[locationID],
+			})
+		}
+
+		return levels, nil
+	}
+
+	// Do not fail the entire request due one malformed stock_levels row.
+	return []models.ProductStockLevel{}, nil
 }
 
 func normalizeStockLevels(stockLevels []ProductStockLevelInput) []ProductStockLevelInput {
