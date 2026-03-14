@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import Login from './components/auth/Login'
 import Signup from './components/auth/Signup'
+import ForgotPassword from './components/auth/ForgotPassword'
 import ConsoleLayout from './components/console/ConsoleLayout'
 import Dashboard from './components/console/pages/Dashboard'
 import MoveHistory from './components/console/pages/MoveHistory'
@@ -105,6 +106,7 @@ function App() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/dashboard" element={<ConsoleLayout><Dashboard /></ConsoleLayout>} />
       <Route path="/operations" element={<Navigate to="/operations/receipts" replace />} />
       <Route path="/operations/receipts" element={<ConsoleLayout><Operations activeTab="receipts" /></ConsoleLayout>} />

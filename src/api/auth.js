@@ -50,6 +50,24 @@ export function apiLogin({ identifier, password }) {
   return post('/auth/login', { identifier, password })
 }
 
+/** Request forgot-password OTP for a registered email. */
+export function apiRequestForgotPasswordOtp({ email }) {
+  return post('/auth/forgot-password/request', { email })
+}
+
+/** Verify forgot-password OTP for email. */
+export function apiVerifyForgotPasswordOtp({ email, otp }) {
+  return post('/auth/forgot-password/verify', { email, otp })
+}
+
+/** Reset password after OTP verification. */
+export function apiResetForgotPassword({ email, newPassword }) {
+  return post('/auth/forgot-password/reset', {
+    email,
+    new_password: newPassword,
+  })
+}
+
 /** Get all data required to render the Settings page. */
 export function apiGetSettingsOverview() {
   return request('/settings', { auth: true })

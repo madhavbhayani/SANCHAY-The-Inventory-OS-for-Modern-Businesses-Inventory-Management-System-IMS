@@ -239,6 +239,58 @@
   line-height: 1.45;
 }
 
+.auth-api-success {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: #eef8f1;
+  border: 1px solid #b8dfc4;
+  font-size: 13px;
+  color: var(--color-success);
+  line-height: 1.45;
+}
+
+.auth-step-strip {
+  margin-top: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auth-step-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-pill);
+  background: rgba(26, 58, 42, 0.08);
+  color: var(--color-muted);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.auth-step-pill.is-active {
+  background: rgba(232, 101, 42, 0.15);
+  color: var(--color-saffron);
+}
+
+.auth-inline-btn {
+  margin-top: 4px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: rgba(26, 58, 42, 0.08);
+  color: var(--color-forest);
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-inline-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* ---- Misc links ---- */
 .auth-forgot-link {
   display: block;

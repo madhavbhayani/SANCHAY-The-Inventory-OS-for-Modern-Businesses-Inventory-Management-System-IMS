@@ -68,6 +68,27 @@ func (r *UserRepo) FindByLoginIDOrEmail(identifier string) (*models.User, error)
 	return &u, nil
 }
 
+// FindByEmail looks up a user by email (case-insensitive).
+func (r *UserRepo) FindByEmail(email string) (*models.User, error) {
+	const q = `
+		SELECT id, login_id, email, password, created_at, updated_at
+		FROM users
+		WHERE lower(email) = lower($1)
+		LIMIT 1`
+
+	var u models.User
+	err := r.db.QueryRow(q, email).Scan(
+		&u.ID, &u.LoginID, &u.Email, &u.Password, &u.CreatedAt, &u.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
 // FindByID looks up a single user by UUID.
 func (r *UserRepo) FindByID(id string) (*models.User, error) {
 	const q = `
