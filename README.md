@@ -61,7 +61,9 @@ Sanchay IMS solves a real problem faced by thousands of Indian warehouse busines
 
 ### Authentication
 - [x] User Sign Up / Login
-- [x] OTP-based password reset
+- [x] Forgot password flow with email existence check
+- [x] 6-digit OTP email verification
+- [x] Password reset with bcrypt hashing
 - [x] JWT token authentication
 - [x] Redirect to Dashboard on success
 
@@ -285,7 +287,7 @@ cp ../.env.example ../.env
 # Edit .env with your database credentials and JWT secret
 
 # 4. Run the server
-go run cmd/main.go
+go run cmd/server/main.go
 ```
 
 The API server starts at `http://localhost:8080`
@@ -296,8 +298,6 @@ The API server starts at `http://localhost:8080`
 
 ```bash
 # From the project root
-cd frontend
-
 # Install dependencies
 npm install
 
@@ -353,11 +353,16 @@ JWT_EXPIRY_HOURS=24
 
 # OTP (for password reset)
 OTP_EXPIRY_MINUTES=10
+
+# SMTP (forgot password emails)
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_app_password
+SMTP_USERNAME=madhavbhayani21@gmail.com
+SMTP_FROM=madhavbhayani21@gmail.com
+SMTP_PASSWORD=your_gmail_app_password
 ```
+
+For Gmail app passwords, values copied with spaces (for example `xxxx xxxx xxxx xxxx`) are accepted.
 
 ---
 
@@ -368,53 +373,46 @@ SMTP_PASS=your_app_password
 |--------|---------------------------|--------------------------|
 | POST   | `/api/auth/signup`        | Create new account       |
 | POST   | `/api/auth/login`         | Login, returns JWT       |
-| POST   | `/api/auth/forgot-password` | Send OTP to email      |
-| POST   | `/api/auth/reset-password`  | Reset with OTP         |
+| POST   | `/api/auth/forgot-password/request` | Verify email exists and send 6-digit OTP |
+| POST   | `/api/auth/forgot-password/verify`  | Verify the OTP for email |
+| POST   | `/api/auth/forgot-password/reset`   | Reset password after OTP verification |
 
-### Products
+### Stocks
 | Method | Endpoint               | Description              |
 |--------|------------------------|--------------------------|
-| GET    | `/api/products`        | List all products        |
-| POST   | `/api/products`        | Create a product         |
-| GET    | `/api/products/:id`    | Get product details      |
-| PUT    | `/api/products/:id`    | Update a product         |
-| GET    | `/api/products/search` | Search by SKU or name    |
+| GET    | `/api/stocks/meta`     | Categories + locations for stock forms |
+| POST   | `/api/stocks/categories` | Create product category |
+| GET    | `/api/stocks/products` | List/search stock products |
+| POST   | `/api/stocks/products` | Create product |
+| PUT    | `/api/stocks/products/{id}` | Update product |
+| DELETE | `/api/stocks/products/{id}` | Delete product |
 
-### Receipts
+### Operations
 | Method | Endpoint                        | Description              |
 |--------|---------------------------------|--------------------------|
-| GET    | `/api/receipts`                 | List all receipts        |
-| POST   | `/api/receipts`                 | Create a receipt         |
-| GET    | `/api/receipts/:id`             | Get receipt details      |
-| POST   | `/api/receipts/:id/validate`    | Validate → stock +N      |
-
-### Deliveries
-| Method | Endpoint                          | Description              |
-|--------|-----------------------------------|--------------------------|
-| GET    | `/api/deliveries`                 | List all deliveries      |
-| POST   | `/api/deliveries`                 | Create delivery order    |
-| GET    | `/api/deliveries/:id`             | Get delivery details     |
-| POST   | `/api/deliveries/:id/validate`    | Validate → stock −N      |
-
-### Transfers
-| Method | Endpoint                          | Description              |
-|--------|-----------------------------------|--------------------------|
-| GET    | `/api/transfers`                  | List all transfers       |
-| POST   | `/api/transfers`                  | Create internal transfer |
-| POST   | `/api/transfers/:id/validate`     | Validate transfer        |
+| GET    | `/api/operations/meta`          | Locations + products for operations |
+| GET    | `/api/operations/receipts`      | List receipt orders |
+| POST   | `/api/operations/receipts`      | Create receipt order |
+| GET    | `/api/operations/delivery`      | List delivery orders |
+| POST   | `/api/operations/delivery`      | Create delivery order |
+| GET    | `/api/operations/orders/{operationType}/{referenceNumber}` | Get operation detail |
+| PUT    | `/api/operations/orders/{operationType}/{referenceNumber}` | Update operation detail |
+| POST   | `/api/operations/orders/{operationType}/{referenceNumber}/validate` | Validate order |
+| POST   | `/api/operations/orders/{operationType}/{referenceNumber}/cancel` | Cancel order |
+| DELETE | `/api/operations/orders/{id}`   | Delete operation order |
 
 ### Adjustments
 | Method | Endpoint               | Description              |
 |--------|------------------------|--------------------------|
-| GET    | `/api/adjustments`     | List all adjustments     |
-| POST   | `/api/adjustments`     | Create adjustment        |
+| GET    | `/api/operations/adjustments` | List adjustment overview + history |
+| POST   | `/api/operations/adjustments/transfer` | Internal transfer between locations |
+| POST   | `/api/operations/adjustments/quantity` | Correct free-to-use quantity |
 
 ### Dashboard & Ledger
 | Method | Endpoint               | Description              |
 |--------|------------------------|--------------------------|
-| GET    | `/api/dashboard`       | All KPI counts           |
-| GET    | `/api/ledger`          | Full stock move history  |
-| GET    | `/api/ledger?product_id=X` | Filtered by product  |
+| GET    | `/api/dashboard/overview` | Dashboard counters + chart data |
+| GET    | `/api/move-history`    | Stock ledger move history |
 
 ---
 
@@ -433,12 +431,21 @@ This starts PostgreSQL, runs migrations, and launches both the Go API and React 
 
 ```bash
 # Frontend
-cd frontend && npm run build
+npm run build
 
 # Backend
-cd backend && go build -o sanchay-server ./cmd/main.go
+cd backend && go build -o sanchay-server ./cmd/server
 ./sanchay-server
 ```
+
+## Forgot Password Flow
+
+1. User enters registered email on `/forgot-password`.
+2. Backend checks if email exists in DB.
+3. Backend sends a 6-digit OTP to the email.
+4. User verifies OTP.
+5. User sets a new password.
+6. Backend stores new password as bcrypt hash.
 
 ---
 
