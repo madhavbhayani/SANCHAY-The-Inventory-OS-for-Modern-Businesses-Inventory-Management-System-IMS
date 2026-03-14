@@ -160,6 +160,8 @@ func mapAdjustmentsError(err error) (int, string) {
 		return http.StatusBadRequest, "invalid source location"
 	case errors.Is(err, repository.ErrAdjustmentDestinationRequired):
 		return http.StatusBadRequest, "destination location is required"
+	case errors.Is(err, repository.ErrAdjustmentDestinationInvalid):
+		return http.StatusBadRequest, "invalid destination location"
 	case errors.Is(err, repository.ErrAdjustmentQuantityInvalid):
 		return http.StatusBadRequest, "quantity must be a non-negative whole number"
 	case errors.Is(err, repository.ErrAdjustmentReasonRequired):

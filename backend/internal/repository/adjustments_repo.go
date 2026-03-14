@@ -14,6 +14,7 @@ var (
 	ErrAdjustmentQuantityInvalid     = errors.New("invalid adjustment quantity")
 	ErrAdjustmentReasonRequired      = errors.New("adjustment reason is required")
 	ErrAdjustmentDestinationRequired = errors.New("adjustment destination location is required")
+	ErrAdjustmentDestinationInvalid  = errors.New("invalid adjustment destination location")
 	ErrAdjustmentNoChange            = errors.New("no adjustment change requested")
 	ErrAdjustmentStockInsufficient   = errors.New("insufficient free-to-use stock")
 )
@@ -170,7 +171,7 @@ func (r *AdjustmentsRepo) TransferStock(input AdjustmentTransferInput) error {
 	}
 	if err := ensureLocationExistsTx(tx, toLocationID); err != nil {
 		if errors.Is(err, ErrAdjustmentLocationInvalid) {
-			return ErrAdjustmentDestinationRequired
+			return ErrAdjustmentDestinationInvalid
 		}
 		return err
 	}

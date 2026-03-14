@@ -106,7 +106,7 @@
   gap: 4px;
 }
 
-.stock-metric-card span {
+.stock-label-with-info > span:first-child {
   color: var(--color-muted);
   font-size: 0.8rem;
   text-transform: uppercase;
@@ -160,6 +160,9 @@
   padding: 8px 10px;
   font-size: 0.74rem;
   line-height: 1.35;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.16);
   opacity: 0;
   pointer-events: none;
