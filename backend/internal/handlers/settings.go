@@ -165,11 +165,11 @@ func (h *SettingsHandler) CreateLocation(w http.ResponseWriter, r *http.Request)
 	req.WarehouseIDs = uniqueTrimmed(req.WarehouseIDs)
 
 	if req.Name == "" || req.ShortCode == "" {
-		writeError(w, "location name and short code are required", http.StatusBadRequest)
+		writeError(w, "location name & short code are required", http.StatusBadRequest)
 		return
 	}
 	if len(req.WarehouseIDs) == 0 {
-		writeError(w, "select at least one warehouse", http.StatusBadRequest)
+		writeError(w, "select atleast one warehouse", http.StatusBadRequest)
 		return
 	}
 

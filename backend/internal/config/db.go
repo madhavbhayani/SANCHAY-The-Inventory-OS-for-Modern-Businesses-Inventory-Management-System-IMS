@@ -34,6 +34,6 @@ func ConnectDB() (*sql.DB, error) {
 		return nil, fmt.Errorf("db.Ping: %w", err)
 	}
 
-	log.Println("[DB] Connected to PostgreSQL → sanchay-ims")
+	log.Println("[DB] Connected to PostgreSQL database")
 	return db, nil
 }
