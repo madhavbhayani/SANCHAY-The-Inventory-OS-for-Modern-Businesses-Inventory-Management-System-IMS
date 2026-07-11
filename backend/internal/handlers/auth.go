@@ -79,7 +79,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch err {
 		case repository.ErrLoginIDTaken:
-			writeError(w, "Login ID is already taken", http.StatusConflict)
+			writeError(w, "Login ID is in use !", http.StatusConflict)
 		case repository.ErrEmailTaken:
 			writeError(w, "Email is already registered", http.StatusConflict)
 		default:
