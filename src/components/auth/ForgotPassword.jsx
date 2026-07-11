@@ -48,7 +48,7 @@ function ForgotPassword() {
     try {
       await apiRequestForgotPasswordOtp({ email: email.trim().toLowerCase() })
       setStep('verify')
-      setSuccessMessage('OTP sent to your email address.')
+      setSuccessMessage('OTP sent to email address.')
     } catch (requestError) {
       setError(requestError?.message || 'Failed to send OTP.')
     } finally {
@@ -77,7 +77,7 @@ function ForgotPassword() {
       setStep('reset')
       setSuccessMessage('OTP verified. You can now set a new password.')
     } catch (verifyError) {
-      setError(verifyError?.message || 'Invalid OTP.')
+      setError(verifyError?.message || 'Incorrect OTP.')
     } finally {
       setLoading(false)
     }
