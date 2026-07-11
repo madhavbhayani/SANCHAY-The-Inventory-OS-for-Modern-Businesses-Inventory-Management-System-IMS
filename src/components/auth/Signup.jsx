@@ -40,7 +40,7 @@ function Signup() {
     const newErrors = {}
 
     if (!formData.loginId.trim()) {
-      newErrors.loginId = 'Login ID is required'
+      newErrors.loginId = 'Login ID is must required'
     }
 
     if (!formData.email.trim()) {
