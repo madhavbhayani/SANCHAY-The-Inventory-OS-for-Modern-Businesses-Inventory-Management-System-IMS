@@ -49,7 +49,7 @@ function Login() {
           </h1>
 
           <p className="auth-poster-sub">
-            Real-time stock tracking, smart transfers, and zero guesswork — all from
+            Real-time stock tracking, smart transfers, & zero guesswork — all from
             one centralized dashboard.
           </p>
 
