@@ -55,8 +55,8 @@ function Login() {
 
           <ul className="auth-poster-feats">
             <li>Real-time visibility across all inventory locations</li>
-            <li>Role-based access for managers and staff</li>
-            <li>Fast barcode-based item lookup and updates</li>
+            <li>Role-based access for managers & staff</li>
+            <li>Fast barcode-based item lookup & updates</li>
           </ul>
         </div>
       </div>
